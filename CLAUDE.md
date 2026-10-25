@@ -17,6 +17,10 @@ programmers, so **readability beats cleverness every time.**
 - Every function details the type and size of it's inputs and outputs
 - **Names say what things are.** `root_chord`, not `cr`; `semispan`, not `b2`.
   Standard aerospace symbols are fine inside a short
+- **One purpose per file.** Split a file when it starts doing two jobs, not to hit
+  a line count. As a prompt to check, look again at any file over ~400 lines of
+  code (excluding docstrings and comments) or any function over ~40 lines.
+
 
 
 ## Commands
