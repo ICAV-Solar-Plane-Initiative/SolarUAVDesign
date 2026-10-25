@@ -19,7 +19,7 @@ def build_reference_aircraft() -> Aircraft:
         "wing",
         root_chord=0.32,
         panels=[
-            {"span": 1.5, "taper": 1.0},
+            {"span": 1.5, "taper": 1.0, "twist_deg": 10.0, "sweep_le_deg": 0.0},
             {"span": 1.0, "taper": 0.6, "sweep_le_deg": 3.0},
         ],
         symmetric=True,
