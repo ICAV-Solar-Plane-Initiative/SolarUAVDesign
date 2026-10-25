@@ -15,35 +15,9 @@ programmers, so **readability beats cleverness every time.**
 ## Commenting and Readbility
 - Every class is accompanied by a description of all of it's attributes and methods
 - Every function details the type and size of it's inputs and outputs
+- **Names say what things are.** `root_chord`, not `cr`; `semispan`, not `b2`.
+  Standard aerospace symbols are fine inside a short
 
-## Current scope
-
-- 2D planform geometry only: lifting surfaces defined by spanwise stations.
-- No airfoils, no 3D geometry, no fuselages, no solar cells yet.
-- Plotting of top and side views.
-
-Do not add features beyond the current scope unless asked.
-
-## Roadmap (build in this order)
-
-1. Geometry (done: `solaruav/geometry`)
-2. Solar income: sun position, irradiance, power on the wing
-3. Power required: atmosphere, drag polar, propulsion efficiency
-4. Energy simulation: battery state of charge over 24 h, endurance and margins
-5. Mass model: structure, battery, solar array, propulsion, avionics
-6. Sizing: design-space sweeps and optimisation
-
-## Layout
-
-```
-solaruav/
-├── geometry/
-│   ├── surface.py    # Station, LiftingSurface: planform definition and properties
-│   └── aircraft.py   # Aircraft: collection of surfaces, reference values, tail volumes
-└── plotting.py       # plot_surface, plot_aircraft: top and side views
-tests/                # pytest; one test file per module
-examples/             # runnable scripts showing typical use
-```
 
 ## Commands
 
@@ -68,9 +42,8 @@ Run `pytest` before every commit. All tests must pass.
 - **Symmetric surfaces:** stations describe one side; `span` and `area` cover
   both sides.
 
-## Writing easy-to-follow code
 
-- **Names say what things are.** `root_chord`, not `cr`; `semispan`, not `b2`.
-  Standard aerospace symbols are fine inside a short
+
+
 
 
