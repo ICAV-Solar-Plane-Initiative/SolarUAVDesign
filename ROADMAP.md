@@ -12,7 +12,7 @@ Main Optimisation Loop
         Section control: specify a number key segments per surface
             Chord
             Span
-            Twist
+            Twist 
         Config control:  specify distances between surfaces and set datum
             X Y Z pos from nose datum
         Cruise condition:
@@ -22,19 +22,34 @@ Main Optimisation Loop
         Ineq Constr.
             Minimum time margin (robustness)
             cruise speed > stall speed
+            Battery geometric position constraints
 
         Eq Constr.
-            Zero moment, L = W at cruise condtion 
+            Zero moment, L = W at cruise condtion
+            Structure withstands ultimate loads 
+
 
 
 Sub processes:
 
-- solar income model
-- charging model (SoC)
+- Solar income model
+    - local solar energy (time and place dependent)
+    - panel arrangement (box packing problem)
+Battery model (SoC)
+    - MPPT /  Balance charging
+    - Battery mass sizing/scaling
+    - Battery locations
 - Aerodynamic Model
     - Lifting line theory (with airfoil Cm0 and lift curve slope)
     - Viscous drag model
     - Power consumption estimation (uses result of drag or with specified polar)
+- Structural Model
+    - Loose empirical scaling model (wing and fuselage specific)
+    - Calculate structural qualities (flexural and torsional rigidity, from beam theory)
+    - Calculate CG
+- Stability and trim
+    - Evaluate mo
+- Plotting utils
 
 
 
