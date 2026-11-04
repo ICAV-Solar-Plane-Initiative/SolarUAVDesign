@@ -7,8 +7,8 @@ from typing import Sequence
 import matplotlib.pyplot as plt
 import numpy as np
 
-from .geometry.aircraft import Aircraft
-from .geometry.surface import LiftingSurface
+from ..geometry.aircraft import Aircraft
+from ..geometry.surface import LiftingSurface
 
 _VIEWS = ("top", "side")
 

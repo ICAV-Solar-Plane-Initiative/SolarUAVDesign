@@ -149,8 +149,6 @@ All are inequalities, written in the form g(x) ≤ 0.
         optimisation/   problem.py, run.py
         plotting/       three_view.py, constraint_diagram.py, polars.py, energy.py
 
-`plotting.py` stays a single file until it outgrows one job, then becomes the package above.
-
 ---
 
 ## 4. Milestones
