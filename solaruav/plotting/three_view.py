@@ -1,4 +1,20 @@
-"""Plotting of 2D aircraft geometry."""
+"""Top and side views of the aircraft geometry.
+
+Purpose
+-------
+Draw the planform of each lifting surface, and the whole aircraft, in top and
+side views, with the mean aerodynamic chord marked.
+
+Inputs
+------
+- ``LiftingSurface`` or ``Aircraft`` from ``solaruav.geometry``.
+- View names ("top", "side"), an optional matplotlib Axes, and style options
+  (colour, label, whether to show the MAC).
+
+Outputs
+-------
+- Matplotlib Figure and Axes with the drawn views.
+"""
 
 from __future__ import annotations
 

@@ -19,6 +19,19 @@ y to starboard, z up.
 All derived properties (area, span, aspect ratio, mean aerodynamic chord...)
 are computed from the stations on demand and never stored, so they cannot fall
 out of step with the geometry.
+
+Inputs
+------
+- Stations: spanwise position s [m], leading-edge x [m] and chord [m] for one
+  side of the surface (array-like, length N >= 2).
+- Placement: ``origin`` (x, y, z) in body axes [m] and ``orientation``.
+- Whether the surface is symmetric (mirrored about the aircraft centreline).
+
+Outputs
+-------
+- Derived geometry: area [m^2], span [m], aspect ratio, taper ratio, mean
+  aerodynamic chord [m] and its position, aerodynamic centre, sweep [deg].
+- Planform outline in local and body coordinates, for plotting.
 """
 
 from __future__ import annotations

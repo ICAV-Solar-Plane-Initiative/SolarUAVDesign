@@ -1,4 +1,22 @@
-"""Aircraft: a named collection of 2D lifting surfaces."""
+"""Aircraft: a named collection of lifting surfaces.
+
+Purpose
+-------
+Group the lifting surfaces of one aircraft, pick the reference surface, and
+give aircraft-level reference quantities and tail volume coefficients.
+
+Inputs
+------
+- Aircraft name (str).
+- List of ``LiftingSurface`` objects with unique names.
+- Name of the reference surface (normally the main wing).
+
+Outputs
+-------
+- Reference area [m^2], span [m] and mean aerodynamic chord [m].
+- Horizontal and vertical tail volume coefficients (floats).
+- A per-surface summary table (list of dicts) and plots.
+"""
 
 from __future__ import annotations
 
