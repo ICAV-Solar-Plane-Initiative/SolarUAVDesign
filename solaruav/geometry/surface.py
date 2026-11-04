@@ -22,8 +22,9 @@ out of step with the geometry.
 
 Inputs
 ------
-- Stations: spanwise position s [m], leading-edge x [m] and chord [m] for one
-  side of the surface (array-like, length N >= 2).
+- Stations: spanwise position s [m], leading-edge x [m], chord [m] and
+  geometric twist [deg] for one side of the surface (array-like, length N >= 2).
+  Twist varies linearly between stations.
 - Placement: ``origin`` (x, y, z) in body axes [m] and ``orientation``.
 - Whether the surface is symmetric (mirrored about the aircraft centreline).
 
@@ -31,6 +32,8 @@ Outputs
 -------
 - Derived geometry: area [m^2], span [m], aspect ratio, taper ratio, mean
   aerodynamic chord [m] and its position, aerodynamic centre, sweep [deg].
+- Chord, leading-edge x and twist at any spanwise position, by linear
+  interpolation between stations.
 - Planform outline in local and body coordinates, for plotting.
 """
 
@@ -56,11 +59,17 @@ class Station:
         Leading-edge x position [m] (positive aft).
     chord : float
         Local chord [m]. Must be positive.
+    twist_deg : float
+        Geometric twist [deg]: the angle of the local chord line to the body
+        x-axis, positive nose-up (leading edge up). This includes the
+        surface's rigging incidence, so the root twist is the root incidence.
+        Washout is negative twist towards the tip. Defaults to 0.
     """
 
     s: float
     x_le: float
     chord: float
+    twist_deg: float = 0.0
 
     def __post_init__(self):
         if not self.chord > 0:
@@ -122,6 +131,8 @@ class LiftingSurface:
         root_chord: float,
         taper: float = 1.0,
         sweep_le_deg: float = 0.0,
+        root_twist_deg: float = 0.0,
+        twist_deg: float = 0.0,
         **kwargs,
     ) -> "LiftingSurface":
         """Single-panel straight-tapered surface.
@@ -137,6 +148,10 @@ class LiftingSurface:
             Tip chord / root chord.
         sweep_le_deg : float
             Leading-edge sweep angle [deg], positive aft.
+        root_twist_deg : float
+            Twist at the root [deg] (the root incidence), positive nose-up.
+        twist_deg : float
+            Change in twist from root to tip [deg]; negative is washout.
         **kwargs
             Passed to the constructor (``symmetric``, ``origin``, ``orientation``).
         """
@@ -145,11 +160,12 @@ class LiftingSurface:
         return cls(
             name=name,
             stations=[
-                Station(s=0.0, x_le=0.0, chord=root_chord),
+                Station(s=0.0, x_le=0.0, chord=root_chord, twist_deg=root_twist_deg),
                 Station(
                     s=semispan,
                     x_le=semispan * np.tan(np.radians(sweep_le_deg)),
                     chord=root_chord * taper,
+                    twist_deg=root_twist_deg + twist_deg,
                 ),
             ],
             **kwargs,
@@ -161,13 +177,17 @@ class LiftingSurface:
         name: str,
         root_chord: float,
         panels: Sequence[dict],
+        root_twist_deg: float = 0.0,
         **kwargs,
     ) -> "LiftingSurface":
         """Build a multi-panel surface panel by panel, from the root outward.
 
         Each panel is a dict with keys ``span`` (spanwise length of this panel,
         for one side), ``taper`` (outer chord / inner chord of this panel) and
-        optionally ``sweep_le_deg``.
+        optionally ``sweep_le_deg`` and ``twist_deg``. ``twist_deg`` is the
+        change in twist across this panel, outer minus inner [deg]; negative
+        is washout. The root twist (root incidence) is set by ``root_twist_deg``.
+        Twist varies linearly across each panel.
 
         Example
         -------
@@ -179,7 +199,7 @@ class LiftingSurface:
                         {"span": 0.8, "taper": 0.6, "sweep_le_deg": 5}],
             )
         """
-        stations = [Station(s=0.0, x_le=0.0, chord=root_chord)]
+        stations = [Station(s=0.0, x_le=0.0, chord=root_chord, twist_deg=root_twist_deg)]
         for p in panels:
             inner = stations[-1]
             ds = p["span"]
@@ -188,6 +208,7 @@ class LiftingSurface:
                     s=inner.s + ds,
                     x_le=inner.x_le + ds * np.tan(np.radians(p.get("sweep_le_deg", 0.0))),
                     chord=inner.chord * p.get("taper", 1.0),
+                    twist_deg=inner.twist_deg + p.get("twist_deg", 0.0),
                 )
             )
         return cls(name=name, stations=stations, **kwargs)
@@ -212,6 +233,11 @@ class LiftingSurface:
         return self.x_le + self.chord
 
     @property
+    def twist_deg(self) -> np.ndarray:
+        """Geometric twist [deg] at each station, shape (N,)."""
+        return np.array([st.twist_deg for st in self.stations])
+
+    @property
     def n_panels(self) -> int:
         return len(self.stations) - 1
 
@@ -222,6 +248,15 @@ class LiftingSurface:
     def x_le_at(self, s: float | np.ndarray) -> np.ndarray:
         """Leading-edge x [m] at spanwise position(s) ``s``."""
         return np.interp(np.abs(s) if self.symmetric else s, self.s, self.x_le)
+
+    def twist_deg_at(self, s: float | np.ndarray) -> np.ndarray:
+        """Geometric twist [deg] at spanwise position(s) ``s``.
+
+        Twist is linearly interpolated between stations, so it is continuous
+        across station boundaries and changes linearly within each panel.
+        Input: float or array of any shape [m]. Output: array of the same shape.
+        """
+        return np.interp(np.abs(s) if self.symmetric else s, self.s, self.twist_deg)
 
     # ------------------------------------------------------------------ #
     # Integrals over one side. c and x_le are linear within each panel, so
