@@ -46,9 +46,11 @@ Battery model (SoC)
 - Structural Model
     - Loose empirical scaling model (wing and fuselage specific)
     - Calculate structural qualities (flexural and torsional rigidity, from beam theory)
+    - Stability and trim
     - Calculate CG
-- Stability and trim
-    - Evaluate mo
+    - Evaluate moments and forces about CG
+    - Calculate static margin
+
 - Plotting utils
 
 
