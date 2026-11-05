@@ -45,6 +45,35 @@ There are three ways to define a surface:
 
 See `examples/reference_aircraft.py` for a complete example.
 
+## Wing shear force and bending moment
+
+The structural load calculator treats one wing semispan as a cantilever fixed
+at the root. Give it spanwise lift and mass-per-span distributions at stations
+from root to tip. Loads are interpolated linearly between stations, and
+distributed weight is subtracted from lift.
+
+```python
+from solaruav.structures.loads import calculate_wing_loads
+
+loads = calculate_wing_loads(
+    span_m=[0.0, 1.0, 2.0],
+    lift_per_span_N_m=[20.0, 15.0, 0.0],
+    mass_per_span_kg_m=[1.0, 0.8, 0.5],
+    limit_load_factor=2.5,
+    safety_factor=1.5,
+)
+print(loads.shear_force_limit_N)       # root to tip [N]
+print(loads.bending_moment_limit_N_m)   # root to tip [N m]
+print(loads.bending_moment_ultimate_N_m)
+```
+
+Run `python examples/wing_loads.py` to open an interactive input form and
+spanwise shear-force and bending-moment plots in one window. Enter
+comma-separated values for the span stations, lift per span and mass per span;
+each list must have the same number of values. Click **Calculate** to update
+the results. The pre-filled values are illustrative, not validated aircraft
+loads.
+
 ## Tests
 
 ```bash
