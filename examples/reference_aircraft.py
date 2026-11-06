@@ -123,10 +123,10 @@ def print_loads(cases) -> None:
 def plot_wing_loads(cruise, cases):
     """Four stacked plots against span: lift per span, shear, bending moment, torque."""
     fig, axes = plt.subplots(4, 1, figsize=(7, 10), sharex=True)
-    axes[0].plot(cruise.s_m, cruise.lift_per_span_N_m, "k--", label="cruise, n = 1")
+    axes[0].plot(cruise.s_m, cruise.lift_per_span_N_m, "k--", label="cruise, n = 1: lift only")
     for loads in (cases.limit, cases.ultimate):
         label = f"n = {loads.load_factor:.1f}"
-        axes[0].plot(loads.s_m, loads.net_load_per_span_N_m, label=f"{label} (net of wing weight)")
+        axes[0].plot(loads.s_m, loads.net_load_per_span_N_m, label=f"{label}: lift − n × wing weight")
         axes[1].plot(loads.s_m, loads.shear_force_N, label=label)
         axes[2].plot(loads.s_m, loads.bending_moment_N_m, label=label)
         axes[3].plot(loads.s_m, loads.torque_N_m, label=label)
@@ -139,7 +139,14 @@ def plot_wing_loads(cruise, cases):
         ax.legend(fontsize=8)
     axes[-1].set_xlabel("Spanwise position s [m]")
     axes[0].set_title("Reference wing loads (one side)")
-    fig.tight_layout()
+    fig.text(
+        0.5, 0.005,
+        "Lift is n × total weight. Wing-borne mass relieves the load along the span; "
+        "the fuselage weight (n × W_fuselage / 2 per side) reacts at the root, "
+        "where it equals the root shear.",
+        ha="center", fontsize=8, wrap=True,
+    )
+    fig.tight_layout(rect=(0, 0.03, 1, 1))
     return fig
 
 
