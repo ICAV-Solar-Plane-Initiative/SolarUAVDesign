@@ -105,7 +105,8 @@ class LiftingLineResult:
     -------------------------------
     aspect_ratio, dynamic_pressure_Pa, lift_coefficient (CL),
     induced_drag_coefficient (CDi), span_efficiency (e), lift_N,
-    induced_drag_N, pitching_moment_coefficient (Cm).
+    induced_drag_N, pitching_moment_coefficient (Cm);
+    downwash_m_s and induced_drag_per_span_N_m (spanwise arrays, shape (n_output,)).
     """
 
     surface_name: str
@@ -162,6 +163,20 @@ class LiftingLineResult:
     def induced_drag_N(self) -> float:
         """Total induced drag of the surface [N], both sides."""
         return self.dynamic_pressure_Pa * self.reference_area_m2 * self.induced_drag_coefficient
+
+    @property
+    def downwash_m_s(self) -> np.ndarray:
+        """Downwash velocity at the lifting line, w = V alpha_i [m/s] (small-angle,
+        as in the linear theory), positive downward. Shape (n_output,)."""
+        return self.airspeed_m_s * np.radians(self.induced_angle_deg)
+
+    @property
+    def induced_drag_per_span_N_m(self) -> np.ndarray:
+        """Induced drag per unit span D_i' = L' alpha_i [N/m] at each output
+        position, one side: the local lift vector is tilted back by the
+        induced angle. Shape (n_output,). Integrates over both sides to
+        ``induced_drag_N``."""
+        return self.lift_per_span_N_m * np.radians(self.induced_angle_deg)
 
     @property
     def pitching_moment_coefficient(self) -> float:

@@ -9,7 +9,8 @@ The script
 2. runs a lifting-line analysis of the wing at the cruise condition (L = W),
 3. derives the spanwise shear force, bending moment and torque at the limit
    and ultimate load factors, and
-4. saves a three-view and a wing-loads plot.
+4. saves a three-view, a lifting-line plot (lift distribution, section Cl,
+   angles, downwash, induced drag) and a wing-loads plot.
 
 The numbers here are a placeholder concept (about 5 m span, conventional
 tail), not a design. The airfoil, masses and load factors below are
@@ -20,6 +21,7 @@ import matplotlib.pyplot as plt
 
 from solaruav import Aircraft, LiftingSurface
 from solaruav.aerodynamics import Airfoil, solve_lifting_line_for_lift
+from solaruav.plotting import plot_lifting_line
 from solaruav.structures import chord_proportional_mass, design_load_cases
 from solaruav.structures.loads import STANDARD_GRAVITY_M_S2
 
@@ -164,5 +166,7 @@ if __name__ == "__main__":
 
     fig, _ = ac.plot()
     fig.savefig("reference_aircraft.png", dpi=150)
+    lifting_line_fig, _ = plot_lifting_line(cruise, wing)
+    lifting_line_fig.savefig("reference_lifting_line.png", dpi=150)
     plot_wing_loads(cruise, cases).savefig("reference_wing_loads.png", dpi=150)
     plt.show()

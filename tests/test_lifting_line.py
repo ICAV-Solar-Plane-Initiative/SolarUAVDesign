@@ -146,3 +146,23 @@ def test_unsupported_surfaces_are_rejected():
     split = LiftingSurface("split", [Station(s=0.2, x_le=0.0, chord=0.3), Station(s=1.0, x_le=0.0, chord=0.3)])
     with pytest.raises(ValueError):
         solve_lifting_line(split, 0.0, AIRSPEED, DENSITY)
+
+
+# ---------------------------------------------------------------------- #
+# Downwash and induced drag distributions
+# ---------------------------------------------------------------------- #
+def test_elliptic_wing_has_uniform_downwash():
+    wing = elliptic_wing()
+    result = solve_lifting_line(wing, 5.0, AIRSPEED, DENSITY)
+    expected = AIRSPEED * result.lift_coefficient / (np.pi * wing.aspect_ratio)
+    np.testing.assert_allclose(result.downwash_m_s, expected, rtol=1e-2)
+
+
+def test_induced_drag_per_span_integrates_to_total():
+    wing = LiftingSurface.from_panels(
+        "w", root_chord=0.32, panels=[{"span": 1.5}, {"span": 1.0, "taper": 0.6, "twist_deg": -2.0}],
+    )
+    result = solve_lifting_line(wing, 4.0, AIRSPEED, DENSITY, n_output=801)
+    drag_per_span, s = result.induced_drag_per_span_N_m, result.s_m
+    integrated = 2 * np.sum(0.5 * (drag_per_span[1:] + drag_per_span[:-1]) * np.diff(s))
+    assert integrated == pytest.approx(result.induced_drag_N, rel=2e-3)
