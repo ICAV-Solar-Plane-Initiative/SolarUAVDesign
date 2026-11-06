@@ -248,6 +248,48 @@ def solve_lifting_line(
     )
 
 
+def solve_lifting_line_for_lift(
+    surface: LiftingSurface,
+    lift_N: float,
+    airspeed_m_s: float,
+    air_density_kg_m3: float,
+    airfoil: Airfoil = Airfoil(),
+    n_terms: int = 30,
+    n_output: int = 101,
+    moment_reference_x_m: float = 0.0,
+) -> LiftingLineResult:
+    """Solve the lifting line at the angle of attack that gives a required lift.
+
+    The lifting-line model is linear, so lift varies linearly with angle of
+    attack: L(alpha) = L(0) + alpha * dL/dalpha. Two solves find that line and
+    a third returns the full solution at the required angle. Use this to get
+    the lift distribution at a load case, e.g. lift_N = n * W.
+
+    Parameters
+    ----------
+    surface, airspeed_m_s, air_density_kg_m3, airfoil, n_terms, n_output,
+    moment_reference_x_m
+        As for ``solve_lifting_line``.
+    lift_N : float
+        Required total lift of the surface, both sides [N].
+
+    Returns
+    -------
+    LiftingLineResult
+        The solution at the required lift; its ``alpha_deg`` is the angle found.
+    """
+    settings = dict(airfoil=airfoil, n_terms=n_terms, n_output=2)
+    lift_at_zero = solve_lifting_line(surface, 0.0, airspeed_m_s, air_density_kg_m3, **settings).lift_N
+    lift_at_one = solve_lifting_line(surface, 1.0, airspeed_m_s, air_density_kg_m3, **settings).lift_N
+    lift_per_degree = lift_at_one - lift_at_zero
+    alpha_deg = (lift_N - lift_at_zero) / lift_per_degree
+    return solve_lifting_line(
+        surface, alpha_deg, airspeed_m_s, air_density_kg_m3,
+        airfoil=airfoil, n_terms=n_terms, n_output=n_output,
+        moment_reference_x_m=moment_reference_x_m,
+    )
+
+
 def _check_surface_is_supported(surface: LiftingSurface) -> None:
     """Raise ValueError unless the surface suits the symmetric Fourier solution."""
     if not surface.symmetric:
