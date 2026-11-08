@@ -125,9 +125,10 @@ def build_wing() -> LiftingSurface:
     return LiftingSurface.from_panels(
         "wing",
         root_chord=0.32,
+        root_twist_deg = 4.0,
         panels=[
-            {"span": 1.5, "taper": 1.0, "twist_deg": 10.0, "sweep_le_deg": 0.0},
-            {"span": 1.0, "taper": 0.6, "sweep_le_deg": 3.0},
+            {"span": 1.5, "taper": 1.0, "twist_deg": -2.0, "sweep_le_deg": -5.0},
+            {"span": 1.0, "taper": 0.6, "twist_deg": -5, "sweep_le_deg": 3.0},
         ],
         symmetric=True,
         origin=(0.0, 0.0, 0.0),
