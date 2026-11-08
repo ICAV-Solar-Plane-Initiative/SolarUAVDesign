@@ -1,71 +1,98 @@
-"""Aircraft: a named collection of lifting surfaces.
+"""Aircraft: a named collection of lifting surfaces and fuselages.
 
 Purpose
 -------
-Group the lifting surfaces of one aircraft, pick the reference surface, and
-give aircraft-level reference quantities and tail volume coefficients.
+Group the lifting surfaces and fuselages of one aircraft, pick the reference
+surface, and give aircraft-level reference quantities and tail volume
+coefficients.
 
 Inputs
 ------
 - Aircraft name (str).
-- List of ``LiftingSurface`` objects with unique names.
+- List of ``LiftingSurface`` objects and list of ``Fuselage`` objects; every
+  name must be unique across both.
 - Name of the reference surface (normally the main wing).
 
 Outputs
 -------
 - Reference area [m^2], span [m] and mean aerodynamic chord [m].
 - Horizontal and vertical tail volume coefficients (floats).
-- A per-surface summary table (list of dicts) and plots.
+- Summary tables of the surfaces and of the fuselages (lists of dicts) and plots.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from .fuselage import Fuselage
 from .surface import LiftingSurface
 
 
 @dataclass
 class Aircraft:
-    """A collection of lifting surfaces.
+    """A collection of lifting surfaces and fuselages.
 
     Parameters
     ----------
     name : str
         Aircraft name.
     surfaces : list of LiftingSurface
-        Surfaces making up the aircraft. Names must be unique.
+        Surfaces making up the aircraft.
     reference_surface : str
         Name of the surface used for reference area, span and chord
         (normally the main wing). Defaults to the first surface.
+    fuselages : list of Fuselage
+        Fuselages, booms and pods. A mirrored ``Fuselage`` counts as one entry
+        but describes two bodies (e.g. a twin-fuselage layout).
+
+    Names must be unique across surfaces and fuselages.
+
+    Methods
+    -------
+    aircraft["name"]
+        The surface or fuselage with that name.
+    add(component)
+        Add a LiftingSurface or Fuselage; returns self for chaining.
+    summary(), fuselage_summary()
+        Lists of dicts, one per surface / per fuselage.
+    plot(**kwargs)
+        Three-view plot, see ``solaruav.plotting.plot_aircraft``.
     """
 
     name: str
     surfaces: list[LiftingSurface] = field(default_factory=list)
     reference_surface: str | None = None
+    fuselages: list[Fuselage] = field(default_factory=list)
 
     def __post_init__(self):
-        names = [s.name for s in self.surfaces]
+        names = self._component_names()
         if len(names) != len(set(names)):
-            raise ValueError(f"Surface names must be unique, got {names}")
+            raise ValueError(f"Surface and fuselage names must be unique, got {names}")
+        surface_names = [s.name for s in self.surfaces]
         if self.reference_surface is None and self.surfaces:
             self.reference_surface = self.surfaces[0].name
-        if self.reference_surface is not None and self.reference_surface not in names:
-            raise ValueError(f"Reference surface '{self.reference_surface}' not in {names}")
+        if self.reference_surface is not None and self.reference_surface not in surface_names:
+            raise ValueError(f"Reference surface '{self.reference_surface}' not in {surface_names}")
 
-    def __getitem__(self, name: str) -> LiftingSurface:
-        for s in self.surfaces:
-            if s.name == name:
-                return s
+    def _component_names(self) -> list[str]:
+        return [s.name for s in self.surfaces] + [f.name for f in self.fuselages]
+
+    def __getitem__(self, name: str) -> LiftingSurface | Fuselage:
+        for component in [*self.surfaces, *self.fuselages]:
+            if component.name == name:
+                return component
         raise KeyError(name)
 
-    def add(self, surface: LiftingSurface) -> "Aircraft":
-        """Add a surface and return self, so calls can be chained."""
-        if any(s.name == surface.name for s in self.surfaces):
-            raise ValueError(f"A surface named '{surface.name}' already exists")
-        self.surfaces.append(surface)
+    def add(self, component: LiftingSurface | Fuselage) -> "Aircraft":
+        """Add a surface or fuselage and return self, so calls can be chained."""
+        if component.name in self._component_names():
+            raise ValueError(f"A component named '{component.name}' already exists")
+        if isinstance(component, Fuselage):
+            self.fuselages.append(component)
+            return self
+        self.surfaces.append(component)
         if self.reference_surface is None:
-            self.reference_surface = surface.name
+            self.reference_surface = component.name
         return self
 
     @property
@@ -103,6 +130,10 @@ class Aircraft:
     def summary(self) -> list[dict]:
         """Planform summary of every surface."""
         return [s.summary() for s in self.surfaces]
+
+    def fuselage_summary(self) -> list[dict]:
+        """Geometry summary of every fuselage (per body, with the body count)."""
+        return [f.summary() for f in self.fuselages]
 
     def plot(self, **kwargs):
         """Plot the aircraft. See :func:`solaruav.plotting.plot_aircraft`."""

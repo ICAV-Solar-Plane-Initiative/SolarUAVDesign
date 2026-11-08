@@ -3,7 +3,7 @@ polars and energy plots."""
 
 from .beam import plot_section_properties
 from .lifting_line import plot_lifting_line
-from .loads import plot_wing_loads
-from .three_view import plot_aircraft, plot_surface
+from .loads import plot_fuselage_loads, plot_wing_loads
+from .three_view import plot_aircraft, plot_fuselage, plot_surface
 
-__all__ = ["plot_aircraft", "plot_lifting_line", "plot_section_properties", "plot_surface", "plot_wing_loads"]
+__all__ = ["plot_aircraft", "plot_fuselage", "plot_fuselage_loads", "plot_lifting_line", "plot_section_properties", "plot_surface", "plot_wing_loads"]

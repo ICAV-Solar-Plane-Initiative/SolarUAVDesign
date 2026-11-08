@@ -2,12 +2,13 @@
 
 Purpose
 -------
-Draw the planform of each lifting surface, and the whole aircraft, in top and
-side views, with the mean aerodynamic chord marked.
+Draw the planform of each lifting surface, the outline of each fuselage, and
+the whole aircraft, in top and side views, with the mean aerodynamic chord
+marked.
 
 Inputs
 ------
-- ``LiftingSurface`` or ``Aircraft`` from ``solaruav.geometry``.
+- ``LiftingSurface``, ``Fuselage`` or ``Aircraft`` from ``solaruav.geometry``.
 - View names ("top", "side"), an optional matplotlib Axes, and style options
   (colour, label, whether to show the MAC).
 
@@ -24,9 +25,11 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from ..geometry.aircraft import Aircraft
+from ..geometry.fuselage import Fuselage
 from ..geometry.surface import LiftingSurface
 
 _VIEWS = ("top", "side")
+FUSELAGE_COLOUR = "#6b6b66"
 
 
 def _extent_line(surface: LiftingSurface) -> tuple[float, float]:
@@ -95,6 +98,38 @@ def plot_surface(
     return ax
 
 
+def plot_fuselage(
+    fuselage: Fuselage,
+    view: str = "top",
+    ax: plt.Axes | None = None,
+    color: str = FUSELAGE_COLOUR,
+    label: str | None = None,
+) -> plt.Axes:
+    """Draw one fuselage (both bodies, if mirrored) in the top or side view.
+
+    Inputs: a Fuselage; view "top" or "side"; optional Axes, colour and label.
+    Output: the Axes drawn on. Axes conventions as for ``plot_surface``.
+    """
+    if view not in _VIEWS:
+        raise ValueError(f"view must be one of {_VIEWS}")
+    if ax is None:
+        _, ax = plt.subplots()
+    label = fuselage.name if label is None else label
+
+    if view == "top":
+        outlines = [fuselage.outline_top_body()]
+        if fuselage.symmetric:
+            outlines.append(fuselage.outline_top_body(mirrored=True))
+    else:
+        outlines = [fuselage.outline_side_body()]  # mirrored bodies overlap in side view
+
+    for i, points in enumerate(outlines):
+        h, v = (points[:, 1], points[:, 0]) if view == "top" else (points[:, 0], points[:, 2])
+        ax.plot(h, v, color=color, lw=1.2, label=label if i == 0 else None, zorder=1)
+        ax.fill(h, v, color=color, alpha=0.2, lw=0, zorder=1)
+    return ax
+
+
 def plot_aircraft(
     aircraft: Aircraft,
     views: Sequence[str] = ("top", "side"),
@@ -103,6 +138,7 @@ def plot_aircraft(
 ) -> tuple[plt.Figure, np.ndarray]:
     """Plot an aircraft in one or more views.
 
+    Fuselages are drawn as grey filled outlines behind the surfaces.
     Quarter-chord lines are dashed. With ``show_mac``, the mean aerodynamic
     chord of each in-plane surface is drawn as a thick bar and its
     quarter-MAC point (approximate aerodynamic centre, on the centreline) as
@@ -124,6 +160,8 @@ def plot_aircraft(
     colors = plt.rcParams["axes.prop_cycle"].by_key()["color"]
 
     for ax, view in zip(axes, views):
+        for fuselage in aircraft.fuselages:
+            plot_fuselage(fuselage, view=view, ax=ax)
         for i, surface in enumerate(aircraft.surfaces):
             plot_surface(surface, view=view, ax=ax, show_mac=show_mac, color=colors[i % len(colors)])
         ax.set_aspect("equal", adjustable="datalim")

@@ -3,8 +3,9 @@
 Purpose
 -------
 Build the spanwise shear force, bending moment and torque on a wing at the
-limit and ultimate load factors, from the lifting-line lift distribution and
-the wing's own mass distribution.
+limit and ultimate load factors, from the lifting-line lift distribution, the
+wing's own mass distribution, and concentrated loads where fuselages are
+mounted on the wing (see ``fuselage_loads``).
 
 Method
 ------
@@ -29,17 +30,33 @@ Lift acts at the local quarter chord x_qc, wing mass at its own chord
 fraction x_mass. A positive bending moment bends the tip up (upper skin in
 compression).
 
-Assumptions: the wing carries all the aircraft's lift (tail load neglected);
+Mount loads. A fuselage mounted on the wing at s_i pushes down on it with a
+force F_i (its share of n W) and a pitching moment M_i about the elastic axis,
+both found from the fuselage's own equilibrium in ``fuselage_loads``. Every
+station inboard of s_i carries them:
+
+    V(s) += F_i              for s < s_i
+    M(s) += F_i (s_i - s)    for s < s_i
+    T(s) += M_i              for s < s_i
+
+So the fuselages of a twin-fuselage aircraft, mounted at s = +-y_f, relieve
+the wing's bending inboard of y_f. A central fuselage mounts at s = 0 and
+loads only the root. Any mass that is neither in the wing distribution nor
+on a mounted fuselage also hangs at the root: it adds to the lift required
+but gives no relief.
+
+Assumptions: the wing carries all the aircraft's lift (tail load and any lift
+from fuselages neglected; the lifting line ignores fuselage interference);
 loads are taken in the wing's local (x, s) plane, so small sweep and dihedral
-are ignored; drag and in-plane loads are not included; mass not on the wing
-(fuselage, battery, payload) adds to the lift required but gives no bending
-relief.
+are ignored; drag and in-plane loads are not included.
 
 Inputs
 ------
 - Spanwise lift distribution from ``aerodynamics.lifting_line`` [N/m].
 - Spanwise mass distribution of the wing (structure, panels, anything else
   carried in the wing) [kg/m], as a function of s.
+- Mount loads from fuselages: spanwise position [m], downward force [N] and
+  nose-up moment [N m], already at the case's load factor.
 - Limit load factor and safety factor (floats).
 
 Outputs
@@ -52,7 +69,7 @@ Outputs
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from typing import Callable
+from typing import Callable, Sequence
 
 import numpy as np
 
@@ -65,6 +82,48 @@ STANDARD_GRAVITY_M_S2 = 9.80665
 # A spanwise mass distribution: takes spanwise positions s [m] (array, any
 # shape) and returns the mass per unit span [kg/m] there (same shape).
 MassPerSpan = Callable[[np.ndarray], np.ndarray]
+
+
+@dataclass(frozen=True)
+class WingPointLoad:
+    """A concentrated load on one side of a symmetric wing, e.g. a fuselage mount.
+
+    The values are at the load case's load factor. On a symmetric wing the
+    same load is mirrored on the other side, so a pair of fuselages at
+    y = +-0.8 m is one WingPointLoad with s_m = 0.8 and the load of one body.
+    Build one from a fuselage with ``FuselageLoads.wing_point_load``.
+
+    Attributes
+    ----------
+    name : str
+        What applies it, e.g. "fuselage".
+    s_m : float
+        Spanwise position, one side [m], 0 (root) to b/2. A load at s = 0
+        acts at the root and adds nothing to the wing's internal loads.
+    downward_force_N : float
+        Force pushing the wing down [N].
+    nose_up_moment_N_m : float
+        Pitching moment applied to the wing about its elastic axis [N m],
+        positive nose-up.
+
+    Methods
+    -------
+    scaled(factor)
+        A copy with the force and moment multiplied by ``factor``.
+    """
+
+    name: str
+    s_m: float
+    downward_force_N: float
+    nose_up_moment_N_m: float = 0.0
+
+    def __post_init__(self):
+        if self.s_m < 0:
+            raise ValueError(f"{self.name}: spanwise position must be >= 0")
+
+    def scaled(self, factor: float) -> "WingPointLoad":
+        return replace(self, downward_force_N=self.downward_force_N * factor,
+                       nose_up_moment_N_m=self.nose_up_moment_N_m * factor)
 
 
 @dataclass(frozen=True)
@@ -94,6 +153,8 @@ class WingLoads:
         Bending moment M(s) [N m], positive tip-up.
     torque_N_m : ndarray
         Torque T(s) about the elastic axis [N m], positive nose-up.
+    point_loads : tuple of WingPointLoad
+        Concentrated loads included (e.g. fuselage mounts; empty if none).
 
     Properties (computed on demand)
     -------------------------------
@@ -117,10 +178,12 @@ class WingLoads:
     shear_force_N: np.ndarray
     bending_moment_N_m: np.ndarray
     torque_N_m: np.ndarray
+    point_loads: tuple[WingPointLoad, ...] = ()
 
     @property
     def net_load_per_span_N_m(self) -> np.ndarray:
-        """Net upward running load w(s) = L'(s) - n g m'(s) [N/m]."""
+        """Net upward running load w(s) = L'(s) - n g m'(s) [N/m]. Point loads
+        are concentrated, so they are not in this distributed load."""
         return self.lift_per_span_N_m - self.inertial_load_per_span_N_m
 
     @property
@@ -148,6 +211,7 @@ class WingLoads:
             shear_force_N=self.shear_force_N * factor,
             bending_moment_N_m=self.bending_moment_N_m * factor,
             torque_N_m=self.torque_N_m * factor,
+            point_loads=tuple(point_load.scaled(factor) for point_load in self.point_loads),
         )
 
 
@@ -181,6 +245,7 @@ def wing_loads(
     mass_per_span_kg_m: MassPerSpan,
     elastic_axis_chord_fraction: float = 0.25,
     mass_chord_fraction: float = 0.40,
+    point_loads: Sequence[WingPointLoad] = (),
 ) -> WingLoads:
     """Shear force, bending moment and torque along one side of a wing.
 
@@ -204,6 +269,9 @@ def wing_loads(
         leading edge. Torque is taken about it.
     mass_chord_fraction : float
         Chordwise position of the wing mass centroid, fraction of local chord.
+    point_loads : sequence of WingPointLoad
+        Concentrated loads on one side of the wing (mirrored on the other), at
+        this case's load factor, e.g. fuselage mounts.
 
     Returns
     -------
@@ -229,6 +297,7 @@ def wing_loads(
     )
 
     shear_force = _integrate_from_tip(net_load, s)
+    point_shear, point_moment, point_torque = _point_load_effects(point_loads, s)
     return WingLoads(
         surface_name=surface.name,
         load_factor=float(load_factor),
@@ -236,10 +305,40 @@ def wing_loads(
         s_m=s,
         lift_per_span_N_m=lift_per_span,
         inertial_load_per_span_N_m=inertial_load,
-        shear_force_N=shear_force,
-        bending_moment_N_m=_integrate_from_tip(shear_force, s),
-        torque_N_m=_integrate_from_tip(twisting_moment_per_span, s),
+        shear_force_N=shear_force + point_shear,
+        bending_moment_N_m=_integrate_from_tip(shear_force, s) + point_moment,
+        torque_N_m=_integrate_from_tip(twisting_moment_per_span, s) + point_torque,
+        point_loads=tuple(point_loads),
     )
+
+
+def _point_load_effects(
+    point_loads: Sequence[WingPointLoad], s: np.ndarray
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Shear [N], bending moment [N m] and torque [N m] from concentrated loads.
+
+    Inputs: point loads; spanwise stations s [m], shape (M,), root to tip.
+    Outputs: three arrays, shape (M,). Exact, since each is a step or a ramp.
+    """
+    shear, moment, torque = np.zeros_like(s), np.zeros_like(s), np.zeros_like(s)
+    for point_load in point_loads:
+        if point_load.s_m > s[-1]:
+            raise ValueError(f"{point_load.name} at s = {point_load.s_m} m is beyond the tip")
+        inboard = s < point_load.s_m
+        # The load pushes down, so it reduces the upward shear and tip-up moment.
+        shear[inboard] -= point_load.downward_force_N
+        moment[inboard] -= point_load.downward_force_N * (point_load.s_m - s[inboard])
+        torque[inboard] += point_load.nose_up_moment_N_m
+    return shear, moment, torque
+
+
+def elastic_axis_x_m(surface: LiftingSurface, s_m: float, chord_fraction: float) -> float:
+    """Body-axis x [m] of a wing's elastic axis at spanwise position s_m [m].
+
+    Use it as the mount x of a fuselage attached to the wing at s_m, so the
+    mount moment is taken about the same axis as the wing torque.
+    """
+    return float(surface.origin[0] + surface.x_le_at(s_m) + chord_fraction * surface.chord_at(s_m))
 
 
 def design_load_cases(
@@ -253,6 +352,7 @@ def design_load_cases(
     safety_factor: float = 1.5,
     elastic_axis_chord_fraction: float = 0.25,
     mass_chord_fraction: float = 0.40,
+    point_loads: Sequence[WingPointLoad] = (),
     n_terms: int = 30,
     n_points: int = 201,
 ) -> DesignLoadCases:
@@ -287,6 +387,10 @@ def design_load_cases(
         Ultimate load factor = limit_load_factor * safety_factor.
     elastic_axis_chord_fraction, mass_chord_fraction : float
         As for ``wing_loads``.
+    point_loads : sequence of WingPointLoad
+        Concentrated loads at the limit load factor (e.g. fuselage mounts from
+        ``FuselageLoads.wing_point_load``); scaled with the safety factor for
+        the ultimate case.
     n_terms : int
         Number of Fourier terms in the lifting-line solution.
     n_points : int
@@ -308,6 +412,7 @@ def design_load_cases(
         limit_aero, surface, airfoil, limit_load_factor, mass_per_span_kg_m,
         elastic_axis_chord_fraction=elastic_axis_chord_fraction,
         mass_chord_fraction=mass_chord_fraction,
+        point_loads=point_loads,
     )
     return DesignLoadCases(
         limit=limit_loads,

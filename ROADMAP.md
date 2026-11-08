@@ -139,10 +139,10 @@ All are inequalities, written in the form g(x) ≤ 0.
 ## 3. Package structure
 
     solaruav/
-        geometry/       aircraft.py, surface.py              (exists)
+        geometry/       aircraft.py, surface.py, fuselage.py  (exists)
         aerodynamics/   lifting_line.py, drag.py, power.py
         mass/           components.py, scaling.py, cg.py
-        structures/     loads.py, beam.py
+        structures/     loads.py, fuselage_loads.py, beam.py
         stability/      trim.py, static_margin.py
         solar/          irradiance.py, panels.py
         energy/         battery.py, mission.py   (24-hour simulation, charge margin)

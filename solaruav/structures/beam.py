@@ -1,13 +1,13 @@
-"""Required section properties of the wing beam, from the wing loads.
+"""Required section properties of the wing and fuselage beams, from their loads.
 
 Purpose
 -------
-Treat one side of a wing as a cantilever beam, clamped at the root (s = 0),
-and work out the minimum structural section properties it needs at each
-spanwise station to carry the design loads. No section geometry is assumed:
-the results say what any spar, tube, box or skin must provide, and are the
-target for sizing the real structure. Write them to a CSV file named after
-the surface.
+Work out the minimum structural section properties each component needs at
+each station to carry the design loads: one side of a wing as a cantilever
+clamped at the root (s = 0), and each fuselage body as a beam supported at its
+wing mount. No section geometry is assumed: the results say what any spar,
+tube, box or skin must provide, and are the target for sizing the real
+structure. Write them to a CSV file named after the component.
 
 Method (Euler-Bernoulli bending and St Venant torsion, small deflections)
 ------
@@ -35,21 +35,28 @@ itself. Two well-defined answers are given:
        EI_uniform = |integral_0^L M_limit(s) (L - s) ds| / w_tip,max
        GJ_uniform = |integral_0^L T_limit(s) ds| / phi_tip,max
 
-Assumptions: linear elastic, small deflections; the root is rigidly clamped
-on the centreline; bending about the chordwise axis only.
+Fuselage: strength only, Z_required(x) = |M_ultimate(x)| / allowable stress,
+along the body. (A stiffness requirement, e.g. tail deflection, can be added
+once a limit is chosen.)
+
+Assumptions: linear elastic, small deflections; the wing root is rigidly
+clamped on the centreline; bending in the vertical plane only.
 
 Inputs
 ------
 - Limit and ultimate spanwise loads from ``loads`` (``DesignLoadCases``):
   shear [N], bending moment [N m] and torque [N m], arrays of length n_points.
+- Ultimate fuselage loads from ``fuselage_loads`` (``FuselageLoads``).
 - Allowable bending stress of the intended material [Pa].
 - Stiffness limits: tip deflection as a fraction of the semispan, tip twist [deg].
 
 Outputs
 -------
-- A ``RequiredSectionProperties``: Z [m^3], EI and GJ [N m^2] required at each
-  spanwise station (arrays of length n_points) and the uniform EI and GJ.
-- A CSV file ``<output_dir>/<surface name>.csv`` with one row per spanwise
+- A ``RequiredSectionProperties`` for a wing: Z [m^3], EI and GJ [N m^2]
+  required at each spanwise station (arrays of length n_points) and the
+  uniform EI and GJ.
+- A ``RequiredFuselageSectionProperties`` for a fuselage: Z [m^3] along the body.
+- A CSV file ``<output_dir>/<component name>.csv`` for each, with one row per
   station: the design loads and the required section properties.
 """
 
@@ -62,6 +69,7 @@ from pathlib import Path
 
 import numpy as np
 
+from .fuselage_loads import FuselageLoads
 from .loads import DesignLoadCases, WingLoads
 
 
@@ -87,7 +95,7 @@ class RequiredSectionProperties:
 
     Properties
     ----------
-    surface_name (str), s_m [m], span_fraction (s / semispan), semispan_m [m],
+    component_name (str, the surface name), surface_name (str), s_m [m], span_fraction (s / semispan), semispan_m [m],
     max_tip_deflection_m [m],
     required_section_modulus_m3 : array, Z = I / c needed for strength [m^3]
     design_curvature_per_m : float, constant curvature kappa [1/m]
@@ -96,6 +104,11 @@ class RequiredSectionProperties:
     design_twist_rate_rad_per_m : float, constant twist rate [rad/m]
     required_torsional_rigidity_N_m2 : array, constant-twist-rate GJ [N m^2]
     required_uniform_torsional_rigidity_N_m2 : float, constant GJ along the span [N m^2]
+
+    Methods
+    -------
+    csv_columns()
+        Ordered dict of column name -> array, shape (n_points,), for the CSV file.
     """
 
     limit_loads: WingLoads
@@ -107,6 +120,10 @@ class RequiredSectionProperties:
     @property
     def surface_name(self) -> str:
         return self.limit_loads.surface_name
+
+    @property
+    def component_name(self) -> str:
+        return self.surface_name
 
     @property
     def s_m(self) -> np.ndarray:
@@ -171,6 +188,89 @@ class RequiredSectionProperties:
         tip_twist_times_GJ = _integrate(self.limit_loads.torque_N_m, self.s_m)
         return abs(tip_twist_times_GJ) / np.radians(self.max_tip_twist_deg)
 
+    def csv_columns(self) -> dict[str, np.ndarray]:
+        """Columns of the CSV file: name (with units) -> array, shape (n_points,)."""
+        limit, ultimate = self.limit_loads, self.ultimate_loads
+        return {
+            "s_m": self.s_m,
+            "span_fraction": self.span_fraction,
+            "limit_bending_moment_N_m": limit.bending_moment_N_m,
+            "limit_torque_N_m": limit.torque_N_m,
+            "ultimate_shear_force_N": ultimate.shear_force_N,
+            "ultimate_bending_moment_N_m": ultimate.bending_moment_N_m,
+            "ultimate_torque_N_m": ultimate.torque_N_m,
+            "required_section_modulus_m3": self.required_section_modulus_m3,
+            "required_EI_N_m2": self.required_flexural_rigidity_N_m2,
+            "required_GJ_N_m2": self.required_torsional_rigidity_N_m2,
+        }
+
+
+@dataclass(frozen=True)
+class RequiredFuselageSectionProperties:
+    """Minimum section modulus along one fuselage body, from its ultimate loads.
+
+    Attributes
+    ----------
+    ultimate_loads : FuselageLoads
+        Loads on the body at the ultimate load factor.
+    allowable_stress_Pa : float
+        Allowable bending stress of the intended material [Pa].
+
+    Properties
+    ----------
+    component_name (str, the fuselage name), x_m [m] (body-axis stations,
+    mount station twice), required_section_modulus_m3 : array, Z = I / c [m^3],
+    max_required_section_modulus_m3 : float [m^3]
+
+    Methods
+    -------
+    csv_columns()
+        Ordered dict of column name -> array, shape (n_stations,), for the CSV file.
+    """
+
+    ultimate_loads: FuselageLoads
+    allowable_stress_Pa: float
+
+    @property
+    def component_name(self) -> str:
+        return self.ultimate_loads.fuselage_name
+
+    @property
+    def x_m(self) -> np.ndarray:
+        return self.ultimate_loads.x_m
+
+    @property
+    def required_section_modulus_m3(self) -> np.ndarray:
+        """Z = I / c needed so the ultimate bending stress stays within the allowable [m^3]."""
+        return np.abs(self.ultimate_loads.bending_moment_N_m) / self.allowable_stress_Pa
+
+    @property
+    def max_required_section_modulus_m3(self) -> float:
+        return float(self.required_section_modulus_m3.max())
+
+    def csv_columns(self) -> dict[str, np.ndarray]:
+        """Columns of the CSV file: name (with units) -> array, shape (n_stations,)."""
+        return {
+            "x_m": self.x_m,
+            "ultimate_shear_force_N": self.ultimate_loads.shear_force_N,
+            "ultimate_bending_moment_N_m": self.ultimate_loads.bending_moment_N_m,
+            "required_section_modulus_m3": self.required_section_modulus_m3,
+        }
+
+
+def required_fuselage_section_properties(
+    ultimate_loads: FuselageLoads, allowable_stress_Pa: float
+) -> RequiredFuselageSectionProperties:
+    """Minimum section modulus along a fuselage body.
+
+    Inputs: the body's ultimate loads (``FuselageLoads``, e.g. limit loads
+    scaled by the safety factor); allowable bending stress [Pa].
+    Output: RequiredFuselageSectionProperties.
+    """
+    if not allowable_stress_Pa > 0:
+        raise ValueError("Allowable stress must be positive")
+    return RequiredFuselageSectionProperties(ultimate_loads, float(allowable_stress_Pa))
+
 
 def required_section_properties(
     cases: DesignLoadCases,
@@ -216,21 +316,23 @@ def required_section_properties(
 
 
 def write_section_properties_csv(
-    properties: RequiredSectionProperties, output_dir: str | Path = "output"
+    properties: RequiredSectionProperties | RequiredFuselageSectionProperties,
+    output_dir: str | Path = "output",
 ) -> Path:
-    """Write the required section properties to ``<output_dir>/<surface name>.csv``.
+    """Write required section properties to ``<output_dir>/<component name>.csv``.
 
-    One row per spanwise station: position, the design loads, then the
-    required section modulus, EI and GJ. Units are in the column names and
-    values are written to 8 significant figures. The output folder is created
-    if it does not exist, and an existing file of the same name is overwritten.
-    The uniform EI and GJ are single numbers, so they are not in the file;
-    read them from the ``RequiredSectionProperties``.
+    One row per station: position, the design loads, then the required
+    section properties (see each class's ``csv_columns``). Units are in the
+    column names and values are written to 8 significant figures. The output
+    folder is created if it does not exist, and an existing file of the same
+    name is overwritten. Single numbers (e.g. the uniform EI and GJ of a wing)
+    are not in the file; read them from the properties object.
 
     Parameters
     ----------
-    properties : RequiredSectionProperties
-        Result of ``required_section_properties``.
+    properties : RequiredSectionProperties or RequiredFuselageSectionProperties
+        Result of ``required_section_properties`` or
+        ``required_fuselage_section_properties``.
     output_dir : str or Path
         Folder to write into. Defaults to ``output`` in the current folder.
 
@@ -239,23 +341,10 @@ def write_section_properties_csv(
     Path
         The path of the written file.
     """
-    limit, ultimate = properties.limit_loads, properties.ultimate_loads
-    columns = {
-        "s_m": properties.s_m,
-        "span_fraction": properties.span_fraction,
-        "limit_bending_moment_N_m": limit.bending_moment_N_m,
-        "limit_torque_N_m": limit.torque_N_m,
-        "ultimate_shear_force_N": ultimate.shear_force_N,
-        "ultimate_bending_moment_N_m": ultimate.bending_moment_N_m,
-        "ultimate_torque_N_m": ultimate.torque_N_m,
-        "required_section_modulus_m3": properties.required_section_modulus_m3,
-        "required_EI_N_m2": properties.required_flexural_rigidity_N_m2,
-        "required_GJ_N_m2": properties.required_torsional_rigidity_N_m2,
-    }
-
+    columns = properties.csv_columns()
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    path = output_dir / f"{_safe_file_name(properties.surface_name)}.csv"
+    path = output_dir / f"{_safe_file_name(properties.component_name)}.csv"
     with open(path, "w", newline="") as file:
         writer = csv.writer(file)
         writer.writerow(columns.keys())
