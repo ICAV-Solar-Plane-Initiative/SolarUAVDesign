@@ -1,4 +1,5 @@
-"""Build an example solar UAV, analyse its wing, derive the wing loads and size the spar.
+"""Build an example solar UAV, analyse its wing, derive the wing loads and the
+section properties the wing structure needs.
 
 Run from the repository root:
 
@@ -9,14 +10,15 @@ The script
 2. runs a lifting-line analysis of the wing at the cruise condition (L = W),
 3. derives the spanwise shear force, bending moment and torque at the limit
    and ultimate load factors,
-4. analyses a carbon-tube spar as a cantilever beam under those loads and
-   writes the results to output/wing.csv, and
+4. works out the section properties (section modulus, EI, GJ) the wing beam
+   needs to carry those loads and writes them to output/wing.csv, and
 5. saves a three-view, a lifting-line plot (lift distribution, section Cl,
-   angles, downwash, induced drag), a wing-loads plot and a beam plot to output/.
+   angles, downwash, induced drag), a wing-loads plot and a required
+   section-properties plot to output/.
 
 The numbers here are a placeholder concept (about 5 m span, conventional
-tail), not a design. The airfoil, masses, load factors, spar size and
-material below are representative guesses, to be replaced with real data.
+tail), not a design. The airfoil, masses, load factors, allowable stress and
+stiffness limits below are representative guesses, to be replaced with real data.
 """
 
 from pathlib import Path
@@ -25,14 +27,12 @@ import matplotlib.pyplot as plt
 
 from solaruav import Aircraft, LiftingSurface
 from solaruav.aerodynamics import Airfoil, solve_lifting_line_for_lift
-from solaruav.plotting import plot_beam, plot_lifting_line, plot_wing_loads
+from solaruav.plotting import plot_lifting_line, plot_section_properties, plot_wing_loads
 from solaruav.structures import (
-    Material,
-    TubeSpar,
-    analyse_design_cases,
     chord_proportional_mass,
     design_load_cases,
-    write_beam_csv,
+    required_section_properties,
+    write_section_properties_csv,
 )
 from solaruav.structures.loads import STANDARD_GRAVITY_M_S2
 
@@ -59,22 +59,11 @@ SAFETY_FACTOR = 1.5
 SPAR_CHORD_FRACTION = 0.25   # elastic axis, fraction of chord from the leading edge
 WING_MASS_CHORD_FRACTION = 0.40
 
-# Main spar: a carbon-fibre tube tapering from root to tip. Typical values for
-# a roll-wrapped tube; replace with the supplier's data sheet.
-CARBON_TUBE = Material(
-    name="Carbon-fibre tube (placeholder)",
-    youngs_modulus_Pa=90e9,
-    shear_modulus_Pa=15e9,
-    density_kg_m3=1550.0,
-    allowable_stress_Pa=400e6,       # compression governs
-    allowable_shear_stress_Pa=60e6,
-)
-WING_SPAR = TubeSpar(
-    material=CARBON_TUBE,
-    root_outer_diameter_m=0.030, tip_outer_diameter_m=0.016,
-    root_wall_thickness_m=0.0010, tip_wall_thickness_m=0.0005,
-)
-AIRFOIL_THICKNESS_RATIO = 0.12  # max thickness / chord, to check the spar fits
+# Structural requirements. The allowable stress is for the intended material
+# (here a placeholder for a carbon-fibre laminate, where compression governs).
+ALLOWABLE_STRESS_PA = 400e6
+MAX_TIP_DEFLECTION_FRACTION = 0.10  # of the semispan, at limit load
+MAX_TIP_TWIST_DEG = 2.0             # elastic twist at limit load
 
 
 def build_reference_aircraft() -> Aircraft:
@@ -150,21 +139,17 @@ def print_loads(cases) -> None:
         )
 
 
-def print_beam(beam_results, wing, csv_path) -> None:
-    limit, ultimate = beam_results
-    print(f"\nSpar beam ({WING_SPAR.material.name}):")
-    print(f"  spar mass = {limit.spar_mass_kg:.3f} kg (both sides)")
-    print(f"  ultimate: max failure index = {ultimate.max_failure_index:.2f} at s = {ultimate.critical_s_m:.2f} m   "
-          f"(reserve factor {1 / ultimate.max_failure_index:.2f})")
-    print(f"  limit:    tip deflection = {limit.tip_deflection_m:.3f} m "
-          f"({limit.tip_deflection_fraction:.1%} of semispan)   tip twist = {limit.tip_twist_deg:.2f} deg")
-    if limit.tip_deflection_fraction > 0.1:
-        print("  Warning: tip deflection exceeds 10% of the semispan; small-deflection theory is unreliable.")
-    for name, span_fraction in [("root", 0.0), ("tip", 1.0)]:
-        depth_m = AIRFOIL_THICKNESS_RATIO * float(wing.chord_at(span_fraction * wing.span / 2))
-        diameter_m = float(WING_SPAR.outer_diameter_m(span_fraction))
-        fits = "fits" if diameter_m < depth_m else "DOES NOT FIT"
-        print(f"  {name}: tube {diameter_m * 1e3:.0f} mm in a {depth_m * 1e3:.0f} mm deep section: {fits}")
+def print_section_properties(properties, csv_path) -> None:
+    root = 0
+    print("\nRequired section properties of the wing beam (one side):")
+    print(f"  strength (ultimate, {properties.allowable_stress_Pa / 1e6:.0f} MPa allowable): "
+          f"root Z = I/c = {properties.required_section_modulus_m3[root] * 1e9:.0f} mm^3")
+    print(f"  bending stiffness (tip deflection <= {properties.max_tip_deflection_m:.3f} m): "
+          f"root EI = {properties.required_flexural_rigidity_N_m2[root]:.0f} N m^2 (constant curvature), "
+          f"uniform EI = {properties.required_uniform_flexural_rigidity_N_m2:.0f} N m^2")
+    print(f"  torsional stiffness (tip twist <= {properties.max_tip_twist_deg:.1f} deg): "
+          f"root GJ = {properties.required_torsional_rigidity_N_m2[root]:.1f} N m^2 (constant twist rate), "
+          f"uniform GJ = {properties.required_uniform_torsional_rigidity_N_m2:.1f} N m^2")
     print(f"  Results written to {csv_path}")
 
 
@@ -189,16 +174,19 @@ if __name__ == "__main__":
     )
     print_loads(cases)
 
-    beam_results = analyse_design_cases(cases, WING_SPAR)
-    csv_path = write_beam_csv(beam_results, OUTPUT_DIR)
-    print_beam(beam_results, wing, csv_path)
+    section_properties = required_section_properties(
+        cases, ALLOWABLE_STRESS_PA,
+        max_tip_deflection_fraction=MAX_TIP_DEFLECTION_FRACTION, max_tip_twist_deg=MAX_TIP_TWIST_DEG,
+    )
+    csv_path = write_section_properties_csv(section_properties, OUTPUT_DIR)
+    print_section_properties(section_properties, csv_path)
 
     OUTPUT_DIR.mkdir(exist_ok=True)
     figures = {
         "reference_aircraft.png": ac.plot()[0],
         "reference_lifting_line.png": plot_lifting_line(cruise, wing)[0],
         "reference_wing_loads.png": plot_wing_loads(cases, cruise)[0],
-        "reference_wing_beam.png": plot_beam(beam_results)[0],
+        "reference_wing_section_properties.png": plot_section_properties(section_properties)[0],
     }
     for file_name, figure in figures.items():
         figure.savefig(OUTPUT_DIR / file_name, dpi=150)

@@ -1,61 +1,56 @@
-"""Beam-theory analysis of the wing structure.
+"""Required section properties of the wing beam, from the wing loads.
 
 Purpose
 -------
 Treat one side of a wing as a cantilever beam, clamped at the root (s = 0),
-to find its stiffness, stresses, deflection and twist under the spanwise
-loads from ``loads``, and the mass of the spar that carries them. Write the
-results to a CSV file named after the surface.
+and work out the minimum structural section properties it needs at each
+spanwise station to carry the design loads. No section geometry is assumed:
+the results say what any spar, tube, box or skin must provide, and are the
+target for sizing the real structure. Write them to a CSV file named after
+the surface.
 
 Method (Euler-Bernoulli bending and St Venant torsion, small deflections)
 ------
-Rigidities from the spar section and material:
+Strength, at the ultimate load. The peak bending stress is |M| / Z, where the
+section modulus Z = I / c (c = distance from the neutral axis to the extreme
+fibre). Keeping it below the allowable stress needs
 
-    EI(s) = E I(s)          flexural rigidity  [N m^2]
-    GJ(s) = G J(s)          torsional rigidity [N m^2]
+    Z_required(s) = |M_ultimate(s)| / allowable stress           [m^3]
 
-Stresses in a circular tube of outer radius r = D/2:
+Stiffness, at the limit load. Tip deflection and twist depend on the whole
+stiffness distribution, so a tip limit does not fix EI or GJ at a station by
+itself. Two well-defined answers are given:
 
-    bending stress   sigma = |M| r / I            (peak fibre stress; tension on
-                                                   one side, compression on the other)
-    shear stress     tau = |T| r / J + 2 |V| / A  (torsion plus the peak transverse
-                                                   shear of a thin tube, added for
-                                                   a conservative estimate)
+1. Constant-rate distribution: every station bends (and twists) at the same
+   rate, so no part of the beam is stiffer than it needs to be. Constant
+   curvature kappa = M / EI gives tip deflection kappa L^2 / 2, and constant
+   twist rate T / GJ gives tip twist rate x L, so
 
-Failure indices compare these with the material allowables; a value above 1
-means the section fails (the reserve factor is 1 / failure index):
+       EI_required(s) = |M_limit(s)| / kappa,   kappa = 2 w_tip,max / L^2
+       GJ_required(s) = |T_limit(s)| / rate,    rate  = phi_tip,max / L
 
-    bending failure index = sigma / allowable stress
-    shear failure index   = tau / allowable shear stress
+2. Uniform value: the single EI (or GJ) that, held constant along the span,
+   just meets the limit (unit-load method):
 
-Deflection and twist, integrated from the clamped root, where slope,
-deflection and twist are all zero:
+       EI_uniform = |integral_0^L M_limit(s) (L - s) ds| / w_tip,max
+       GJ_uniform = |integral_0^L T_limit(s) ds| / phi_tip,max
 
-    slope       dw/ds = integral from root of M / EI ds   [rad]
-    deflection  w(s)  = integral from root of dw/ds ds    [m], positive up
-    twist       phi(s) = integral from root of T / GJ ds  [rad], positive nose-up
-
-Assumptions: linear elastic, small deflections (check the tip deflection is a
-small fraction of the semispan); the spar alone carries all loads (skin, ribs
-and panels add stiffness and mass that are not counted here); the root is
-rigidly clamped on the centreline.
+Assumptions: linear elastic, small deflections; the root is rigidly clamped
+on the centreline; bending about the chordwise axis only.
 
 Inputs
 ------
-- Spanwise loads from ``loads``: a ``WingLoads`` for each load case, with
+- Limit and ultimate spanwise loads from ``loads`` (``DesignLoadCases``):
   shear [N], bending moment [N m] and torque [N m], arrays of length n_points.
-- The spar: a ``TubeSpar`` from ``sections`` (geometry along the span and
-  material: E, G [Pa], density [kg/m^3], allowable stresses [Pa]).
+- Allowable bending stress of the intended material [Pa].
+- Stiffness limits: tip deflection as a fraction of the semispan, tip twist [deg].
 
 Outputs
 -------
-- A ``BeamResult`` per load case: EI and GJ [N m^2], stresses [Pa], failure
-  indices, slope [rad], deflection [m] and twist [deg] at each spanwise station
-  (arrays of length n_points), and the totals the constraints need: maximum
-  failure index, tip deflection [m] and spar mass [kg].
+- A ``RequiredSectionProperties``: Z [m^3], EI and GJ [N m^2] required at each
+  spanwise station (arrays of length n_points) and the uniform EI and GJ.
 - A CSV file ``<output_dir>/<surface name>.csv`` with one row per spanwise
-  station: the spar section properties, then every quantity above for each
-  load case, with the case name as a column prefix.
+  station: the design loads and the required section properties.
 """
 
 from __future__ import annotations
@@ -64,67 +59,58 @@ import csv
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Sequence
 
 import numpy as np
 
 from .loads import DesignLoadCases, WingLoads
-from .sections import TubeSpar
 
 
 @dataclass(frozen=True)
-class BeamResult:
-    """Beam analysis of one side of a wing at one load case.
+class RequiredSectionProperties:
+    """Minimum section properties of one side of a wing at each spanwise station.
 
     Only the inputs are stored; every result is computed on demand from them.
     All arrays have shape (n_points,) and run from the root (s = 0) to the tip.
 
     Attributes
     ----------
-    load_case : str
-        Name of the load case, e.g. "limit" or "ultimate". Used as the column
-        prefix in the CSV file.
-    loads : WingLoads
-        The spanwise loads of this case.
-    spar : TubeSpar
-        The spar that carries them.
+    limit_loads : WingLoads
+        Loads at the limit load factor; set the stiffness requirements.
+    ultimate_loads : WingLoads
+        Loads at the ultimate load factor; set the strength requirement.
+    allowable_stress_Pa : float
+        Allowable bending stress of the intended material [Pa].
+    max_tip_deflection_fraction : float
+        Largest allowed tip deflection at limit load, as a fraction of the semispan.
+    max_tip_twist_deg : float
+        Largest allowed elastic tip twist at limit load [deg].
 
-    Properties: spanwise arrays
-    ---------------------------
-    surface_name (str), load_factor (float), s_m [m], span_fraction (s / semispan),
-    outer_diameter_m [m], wall_thickness_m [m], area_m2 [m^2],
-    second_moment_m4 [m^4], polar_moment_m4 [m^4], mass_per_span_kg_m [kg/m],
-    flexural_rigidity_N_m2 (EI) [N m^2], torsional_rigidity_N_m2 (GJ) [N m^2],
-    bending_stress_Pa [Pa], shear_stress_Pa [Pa],
-    bending_failure_index, shear_failure_index, failure_index (the larger of the two),
-    slope_rad [rad], deflection_m [m], twist_deg [deg].
-
-    Properties: totals
-    ------------------
-    max_bending_stress_Pa [Pa], max_shear_stress_Pa [Pa], max_failure_index,
-    critical_s_m (where the failure index is largest) [m],
-    tip_deflection_m [m], tip_deflection_fraction (of the semispan),
-    tip_twist_deg [deg], spar_mass_kg (both sides) [kg].
+    Properties
+    ----------
+    surface_name (str), s_m [m], span_fraction (s / semispan), semispan_m [m],
+    max_tip_deflection_m [m],
+    required_section_modulus_m3 : array, Z = I / c needed for strength [m^3]
+    design_curvature_per_m : float, constant curvature kappa [1/m]
+    required_flexural_rigidity_N_m2 : array, constant-curvature EI [N m^2]
+    required_uniform_flexural_rigidity_N_m2 : float, constant EI along the span [N m^2]
+    design_twist_rate_rad_per_m : float, constant twist rate [rad/m]
+    required_torsional_rigidity_N_m2 : array, constant-twist-rate GJ [N m^2]
+    required_uniform_torsional_rigidity_N_m2 : float, constant GJ along the span [N m^2]
     """
 
-    load_case: str
-    loads: WingLoads
-    spar: TubeSpar
+    limit_loads: WingLoads
+    ultimate_loads: WingLoads
+    allowable_stress_Pa: float
+    max_tip_deflection_fraction: float
+    max_tip_twist_deg: float
 
-    # ------------------------------------------------------------------ #
-    # Positions and section properties
-    # ------------------------------------------------------------------ #
     @property
     def surface_name(self) -> str:
-        return self.loads.surface_name
-
-    @property
-    def load_factor(self) -> float:
-        return self.loads.load_factor
+        return self.limit_loads.surface_name
 
     @property
     def s_m(self) -> np.ndarray:
-        return self.loads.s_m
+        return self.limit_loads.s_m
 
     @property
     def semispan_m(self) -> float:
@@ -135,179 +121,116 @@ class BeamResult:
         return self.s_m / self.semispan_m
 
     @property
-    def outer_diameter_m(self) -> np.ndarray:
-        return self.spar.outer_diameter_m(self.span_fraction)
-
-    @property
-    def wall_thickness_m(self) -> np.ndarray:
-        return self.spar.wall_thickness_m(self.span_fraction)
-
-    @property
-    def area_m2(self) -> np.ndarray:
-        return self.spar.area_m2(self.span_fraction)
-
-    @property
-    def second_moment_m4(self) -> np.ndarray:
-        return self.spar.second_moment_m4(self.span_fraction)
-
-    @property
-    def polar_moment_m4(self) -> np.ndarray:
-        return self.spar.polar_moment_m4(self.span_fraction)
-
-    @property
-    def mass_per_span_kg_m(self) -> np.ndarray:
-        return self.spar.mass_per_span_kg_m(self.span_fraction)
-
-    @property
-    def flexural_rigidity_N_m2(self) -> np.ndarray:
-        """EI [N m^2]."""
-        return self.spar.material.youngs_modulus_Pa * self.second_moment_m4
-
-    @property
-    def torsional_rigidity_N_m2(self) -> np.ndarray:
-        """GJ [N m^2]."""
-        return self.spar.material.shear_modulus_Pa * self.polar_moment_m4
+    def max_tip_deflection_m(self) -> float:
+        return self.max_tip_deflection_fraction * self.semispan_m
 
     # ------------------------------------------------------------------ #
-    # Stresses
+    # Strength
     # ------------------------------------------------------------------ #
     @property
-    def bending_stress_Pa(self) -> np.ndarray:
-        """Peak fibre bending stress |M| r / I [Pa]."""
-        outer_radius = self.outer_diameter_m / 2
-        return np.abs(self.loads.bending_moment_N_m) * outer_radius / self.second_moment_m4
-
-    @property
-    def shear_stress_Pa(self) -> np.ndarray:
-        """Peak shear stress |T| r / J + 2 |V| / A [Pa]."""
-        outer_radius = self.outer_diameter_m / 2
-        torsion = np.abs(self.loads.torque_N_m) * outer_radius / self.polar_moment_m4
-        transverse = 2 * np.abs(self.loads.shear_force_N) / self.area_m2
-        return torsion + transverse
-
-    @property
-    def bending_failure_index(self) -> np.ndarray:
-        return self.bending_stress_Pa / self.spar.material.allowable_stress_Pa
-
-    @property
-    def shear_failure_index(self) -> np.ndarray:
-        return self.shear_stress_Pa / self.spar.material.allowable_shear_stress_Pa
-
-    @property
-    def failure_index(self) -> np.ndarray:
-        """The larger of the bending and shear failure indices at each station."""
-        return np.maximum(self.bending_failure_index, self.shear_failure_index)
+    def required_section_modulus_m3(self) -> np.ndarray:
+        """Z = I / c needed so the ultimate bending stress stays within the allowable [m^3]."""
+        return np.abs(self.ultimate_loads.bending_moment_N_m) / self.allowable_stress_Pa
 
     # ------------------------------------------------------------------ #
-    # Deflection and twist
+    # Bending stiffness
     # ------------------------------------------------------------------ #
     @property
-    def slope_rad(self) -> np.ndarray:
-        """Bending slope dw/ds [rad], zero at the root."""
-        return _integrate_from_root(self.loads.bending_moment_N_m / self.flexural_rigidity_N_m2, self.s_m)
+    def design_curvature_per_m(self) -> float:
+        """Constant curvature that gives the allowed tip deflection, 2 w_tip / L^2 [1/m]."""
+        return 2 * self.max_tip_deflection_m / self.semispan_m**2
 
     @property
-    def deflection_m(self) -> np.ndarray:
-        """Vertical deflection w [m], positive up, zero at the root."""
-        return _integrate_from_root(self.slope_rad, self.s_m)
+    def required_flexural_rigidity_N_m2(self) -> np.ndarray:
+        """EI giving constant curvature along the span and the allowed tip deflection [N m^2]."""
+        return np.abs(self.limit_loads.bending_moment_N_m) / self.design_curvature_per_m
 
     @property
-    def twist_deg(self) -> np.ndarray:
-        """Elastic twist [deg], positive nose-up, zero at the root."""
-        return np.degrees(_integrate_from_root(self.loads.torque_N_m / self.torsional_rigidity_N_m2, self.s_m))
+    def required_uniform_flexural_rigidity_N_m2(self) -> float:
+        """The constant EI that gives the allowed tip deflection [N m^2]."""
+        lever_to_tip = self.semispan_m - self.s_m
+        tip_deflection_times_EI = _integrate(self.limit_loads.bending_moment_N_m * lever_to_tip, self.s_m)
+        return abs(tip_deflection_times_EI) / self.max_tip_deflection_m
 
     # ------------------------------------------------------------------ #
-    # Totals for the constraints
+    # Torsional stiffness
     # ------------------------------------------------------------------ #
     @property
-    def max_bending_stress_Pa(self) -> float:
-        return float(self.bending_stress_Pa.max())
+    def design_twist_rate_rad_per_m(self) -> float:
+        """Constant twist rate that gives the allowed tip twist [rad/m]."""
+        return np.radians(self.max_tip_twist_deg) / self.semispan_m
 
     @property
-    def max_shear_stress_Pa(self) -> float:
-        return float(self.shear_stress_Pa.max())
+    def required_torsional_rigidity_N_m2(self) -> np.ndarray:
+        """GJ giving a constant twist rate along the span and the allowed tip twist [N m^2]."""
+        return np.abs(self.limit_loads.torque_N_m) / self.design_twist_rate_rad_per_m
 
     @property
-    def max_failure_index(self) -> float:
-        return float(self.failure_index.max())
-
-    @property
-    def critical_s_m(self) -> float:
-        """Spanwise position [m] of the largest failure index."""
-        return float(self.s_m[np.argmax(self.failure_index)])
-
-    @property
-    def tip_deflection_m(self) -> float:
-        return float(self.deflection_m[-1])
-
-    @property
-    def tip_deflection_fraction(self) -> float:
-        """Tip deflection as a fraction of the semispan (small-deflection theory
-        is reasonable below about 0.1)."""
-        return self.tip_deflection_m / self.semispan_m
-
-    @property
-    def tip_twist_deg(self) -> float:
-        return float(self.twist_deg[-1])
-
-    @property
-    def spar_mass_kg(self) -> float:
-        """Mass of the spar, both sides [kg]."""
-        return 2 * float(_integrate_from_root(self.mass_per_span_kg_m, self.s_m)[-1])
+    def required_uniform_torsional_rigidity_N_m2(self) -> float:
+        """The constant GJ that gives the allowed tip twist [N m^2]."""
+        tip_twist_times_GJ = _integrate(self.limit_loads.torque_N_m, self.s_m)
+        return abs(tip_twist_times_GJ) / np.radians(self.max_tip_twist_deg)
 
 
-def analyse_beam(loads: WingLoads, spar: TubeSpar, load_case: str) -> BeamResult:
-    """Analyse one side of a wing as a cantilever beam at one load case.
+def required_section_properties(
+    cases: DesignLoadCases,
+    allowable_stress_Pa: float,
+    max_tip_deflection_fraction: float = 0.10,
+    max_tip_twist_deg: float = 2.0,
+) -> RequiredSectionProperties:
+    """Minimum section properties of a wing beam to carry its design loads.
 
     Parameters
     ----------
-    loads : WingLoads
-        Spanwise loads, arrays of shape (n_points,) from root to tip.
-    spar : TubeSpar
-        The spar section and material.
-    load_case : str
-        Name of the case, e.g. "limit". Letters, digits and underscores only,
-        since it becomes a CSV column prefix.
+    cases : DesignLoadCases
+        Limit and ultimate loads from ``loads.design_load_cases``.
+    allowable_stress_Pa : float
+        Allowable bending stress of the intended material [Pa]: the lower of
+        its tension and compression allowables.
+    max_tip_deflection_fraction : float
+        Largest allowed tip deflection at limit load, as a fraction of the
+        semispan. 0.1 is also roughly where small-deflection theory stops
+        being reliable.
+    max_tip_twist_deg : float
+        Largest allowed elastic tip twist at limit load [deg].
 
     Returns
     -------
-    BeamResult
+    RequiredSectionProperties
     """
-    if not re.fullmatch(r"\w+", load_case):
-        raise ValueError(f"Load case name '{load_case}' must be letters, digits and underscores only")
-    starts_at_root = abs(loads.s_m[0]) <= 1e-9 * loads.s_m[-1]  # allow rounding error
-    if not starts_at_root or np.any(np.diff(loads.s_m) <= 0):
+    if not (allowable_stress_Pa > 0 and max_tip_deflection_fraction > 0 and max_tip_twist_deg > 0):
+        raise ValueError("Allowable stress and the stiffness limits must be positive")
+    limit, ultimate = cases.limit, cases.ultimate
+    starts_at_root = abs(limit.s_m[0]) <= 1e-9 * limit.s_m[-1]  # allow rounding error
+    if not starts_at_root or np.any(np.diff(limit.s_m) <= 0):
         raise ValueError("Loads must start at the root (s = 0) and increase towards the tip")
-    return BeamResult(load_case=load_case, loads=loads, spar=spar)
+    if not np.array_equal(limit.s_m, ultimate.s_m):
+        raise ValueError("Limit and ultimate loads must be at the same stations")
+    return RequiredSectionProperties(
+        limit_loads=limit,
+        ultimate_loads=ultimate,
+        allowable_stress_Pa=float(allowable_stress_Pa),
+        max_tip_deflection_fraction=float(max_tip_deflection_fraction),
+        max_tip_twist_deg=float(max_tip_twist_deg),
+    )
 
 
-def analyse_design_cases(cases: DesignLoadCases, spar: TubeSpar) -> list[BeamResult]:
-    """Analyse the beam at the limit and ultimate load cases.
+def write_section_properties_csv(
+    properties: RequiredSectionProperties, output_dir: str | Path = "output"
+) -> Path:
+    """Write the required section properties to ``<output_dir>/<surface name>.csv``.
 
-    Use the limit result for the stiffness constraint (tip deflection) and the
-    ultimate result for the strength constraint (failure index <= 1).
-
-    Inputs: design load cases from ``loads.design_load_cases``; the spar.
-    Output: list of two BeamResults, [limit, ultimate].
-    """
-    return [analyse_beam(cases.limit, spar, "limit"), analyse_beam(cases.ultimate, spar, "ultimate")]
-
-
-def write_beam_csv(results: Sequence[BeamResult], output_dir: str | Path = "output") -> Path:
-    """Write beam results for one surface to ``<output_dir>/<surface name>.csv``.
-
-    One row per spanwise station. The first columns are the spar section
-    properties (the same for every case); then, for each result, its loads,
-    stresses, failure indices, deflection and twist, each column prefixed with
-    the load case name, e.g. ``ultimate_bending_stress_Pa``. Units are in the
-    column names, and values are written to 8 significant figures. The output
-    folder is created if it does not exist, and an existing file of the same
-    name is overwritten.
+    One row per spanwise station: position, the design loads, then the
+    required section modulus, EI and GJ. Units are in the column names and
+    values are written to 8 significant figures. The output folder is created
+    if it does not exist, and an existing file of the same name is overwritten.
+    The uniform EI and GJ are single numbers, so they are not in the file;
+    read them from the ``RequiredSectionProperties``.
 
     Parameters
     ----------
-    results : sequence of BeamResult
-        One or more load cases of the same surface, at the same stations.
+    properties : RequiredSectionProperties
+        Result of ``required_section_properties``.
     output_dir : str or Path
         Folder to write into. Defaults to ``output`` in the current folder.
 
@@ -316,23 +239,23 @@ def write_beam_csv(results: Sequence[BeamResult], output_dir: str | Path = "outp
     Path
         The path of the written file.
     """
-    if not results:
-        raise ValueError("Need at least one BeamResult to write")
-    first = results[0]
-    for result in results[1:]:
-        if result.surface_name != first.surface_name or not np.array_equal(result.s_m, first.s_m):
-            raise ValueError("All results in one CSV must be for the same surface and stations")
-    case_names = [result.load_case for result in results]
-    if len(set(case_names)) != len(case_names):
-        raise ValueError(f"Load case names must be unique, got {case_names}")
-
-    columns = _section_columns(first)
-    for result in results:
-        columns.update(_load_case_columns(result))
+    limit, ultimate = properties.limit_loads, properties.ultimate_loads
+    columns = {
+        "s_m": properties.s_m,
+        "span_fraction": properties.span_fraction,
+        "limit_bending_moment_N_m": limit.bending_moment_N_m,
+        "limit_torque_N_m": limit.torque_N_m,
+        "ultimate_shear_force_N": ultimate.shear_force_N,
+        "ultimate_bending_moment_N_m": ultimate.bending_moment_N_m,
+        "ultimate_torque_N_m": ultimate.torque_N_m,
+        "required_section_modulus_m3": properties.required_section_modulus_m3,
+        "required_EI_N_m2": properties.required_flexural_rigidity_N_m2,
+        "required_GJ_N_m2": properties.required_torsional_rigidity_N_m2,
+    }
 
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    path = output_dir / f"{_safe_file_name(first.surface_name)}.csv"
+    path = output_dir / f"{_safe_file_name(properties.surface_name)}.csv"
     with open(path, "w", newline="") as file:
         writer = csv.writer(file)
         writer.writerow(columns.keys())
@@ -341,50 +264,11 @@ def write_beam_csv(results: Sequence[BeamResult], output_dir: str | Path = "outp
     return path
 
 
-def _section_columns(result: BeamResult) -> dict[str, np.ndarray]:
-    """CSV columns that depend only on the spar: name -> array, shape (n_points,)."""
-    return {
-        "s_m": result.s_m,
-        "span_fraction": result.span_fraction,
-        "outer_diameter_m": result.outer_diameter_m,
-        "wall_thickness_m": result.wall_thickness_m,
-        "area_m2": result.area_m2,
-        "second_moment_m4": result.second_moment_m4,
-        "polar_moment_m4": result.polar_moment_m4,
-        "EI_N_m2": result.flexural_rigidity_N_m2,
-        "GJ_N_m2": result.torsional_rigidity_N_m2,
-        "spar_mass_per_span_kg_m": result.mass_per_span_kg_m,
-    }
-
-
-def _load_case_columns(result: BeamResult) -> dict[str, np.ndarray]:
-    """CSV columns for one load case, prefixed with its name: name -> array, shape (n_points,)."""
-    columns = {
-        "load_factor": np.full_like(result.s_m, result.load_factor),
-        "shear_force_N": result.loads.shear_force_N,
-        "bending_moment_N_m": result.loads.bending_moment_N_m,
-        "torque_N_m": result.loads.torque_N_m,
-        "bending_stress_Pa": result.bending_stress_Pa,
-        "shear_stress_Pa": result.shear_stress_Pa,
-        "bending_failure_index": result.bending_failure_index,
-        "shear_failure_index": result.shear_failure_index,
-        "slope_rad": result.slope_rad,
-        "deflection_m": result.deflection_m,
-        "twist_deg": result.twist_deg,
-    }
-    return {f"{result.load_case}_{name}": values for name, values in columns.items()}
-
-
 def _safe_file_name(name: str) -> str:
     """Replace anything but letters, digits, '-' and '_' with '_', e.g. 'main wing' -> 'main_wing'."""
     return re.sub(r"[^\w\-]+", "_", name).strip("_") or "surface"
 
 
-def _integrate_from_root(values: np.ndarray, s: np.ndarray) -> np.ndarray:
-    """Running integral of ``values`` from the root to each station.
-
-    Inputs: values and spanwise positions s [m], shape (M,), root to tip.
-    Output: shape (M,), element i is the trapezoidal integral from s[0] to s[i].
-    """
-    strip_integrals = 0.5 * (values[1:] + values[:-1]) * np.diff(s)
-    return np.concatenate([[0.0], np.cumsum(strip_integrals)])
+def _integrate(values: np.ndarray, s: np.ndarray) -> float:
+    """Trapezoidal integral of ``values`` over spanwise positions ``s`` (both shape (M,))."""
+    return float(np.sum(0.5 * (values[1:] + values[:-1]) * np.diff(s)))

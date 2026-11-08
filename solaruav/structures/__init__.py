@@ -1,11 +1,10 @@
-"""Structural model: wing loads, spar sections, stresses and stiffness."""
+"""Structural model: wing loads and the section properties needed to carry them."""
 
-from .beam import BeamResult, analyse_beam, analyse_design_cases, write_beam_csv
+from .beam import RequiredSectionProperties, required_section_properties, write_section_properties_csv
 from .loads import DesignLoadCases, WingLoads, chord_proportional_mass, design_load_cases, wing_loads
-from .sections import Material, TubeSpar
 
 __all__ = [
-    "BeamResult", "DesignLoadCases", "Material", "TubeSpar", "WingLoads",
-    "analyse_beam", "analyse_design_cases", "chord_proportional_mass",
-    "design_load_cases", "wing_loads", "write_beam_csv",
+    "DesignLoadCases", "RequiredSectionProperties", "WingLoads",
+    "chord_proportional_mass", "design_load_cases", "required_section_properties",
+    "wing_loads", "write_section_properties_csv",
 ]
