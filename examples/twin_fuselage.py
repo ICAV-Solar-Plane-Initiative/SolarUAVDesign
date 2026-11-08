@@ -22,6 +22,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import matplotlib.pyplot as plt
 from reference_aircraft import (
     FUSELAGE_MASSES,
     OUTPUT_DIR,
@@ -105,3 +106,4 @@ if __name__ == "__main__":
     save_figures(twin, "twin", TWIN_OUTPUT_DIR)
 
     print_comparison(single, twin)
+    plt.show()  # open every figure in its own window

@@ -353,7 +353,6 @@ def save_figures(analysis: StructuralAnalysis, prefix: str, output_dir: Path = O
         figures[f"{prefix}_{name}_loads.png"] = plot_fuselage_loads(loads, analysis.fuselage_required[name])[0]
     for file_name, figure in figures.items():
         figure.savefig(output_dir / file_name, dpi=150)
-        plt.close(figure)
     print(f"Figures saved to {output_dir}/")
 
 
@@ -363,3 +362,4 @@ if __name__ == "__main__":
     analysis = run_structural_analysis(reference, FUSELAGE_MASSES)  # steps 2-4
     print_results(analysis)
     save_figures(analysis, "reference")
+    plt.show()  # open every figure in its own window
