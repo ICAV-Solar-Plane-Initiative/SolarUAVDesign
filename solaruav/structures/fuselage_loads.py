@@ -4,7 +4,8 @@ Purpose
 -------
 Treat one fuselage body as a beam supported at its wing mount, carrying its
 own structure and the items mounted in or on it (battery, payload, avionics,
-tail surfaces) in a symmetric pull-up at load factor n. Find its shear force
+tail surfaces) in a symmetric pull-up at load factor n, and the aerodynamic
+force of the tail where the tail is attached. Find its shear force
 and bending moment along its length, and the force and pitching moment it
 puts into the wing at the mount.
 
@@ -13,7 +14,9 @@ Method
 Every mass pulls down with n g m: the fuselage structure as a distributed
 load q(x) = n g m'(x), with m'(x) proportional to the local perimeter of the
 cross-section (i.e. to wetted area), and each mass item i as a point load
-P_i = n g m_i at its x_i. The mount, at x_mount on the wing's elastic axis,
+P_i = n g m_i at its x_i. An aerodynamic force (the body's share of the
+trimmed tail lift L_t) acts at its x as a point load -L_t: an upward tail lift
+pushes the boom up. The mount, at x_mount on the wing's elastic axis,
 holds the body up. Each side of the mount is a cantilever, integrated from
 its free end (nose or tail) towards the mount:
 
@@ -26,21 +29,24 @@ the output: first the nose-side value, then the tail-side value.
 
 The body pushes down on the wing at the mount with
 
-    force   F = integral of q dx + sum P_i                         (its total weight x n)
+    force   F = integral of q dx + sum P_i                   (its weight x n, less any tail lift)
     moment  M_mount = integral of q (x - x_mount) dx + sum P_i (x_i - x_mount)
 
 positive nose-up: load aft of the mount tips the body tail-down, nose-up.
 F and M_mount go into the wing loads as a ``WingPointLoad``.
 
 Assumptions: symmetric pull-up, so no side loads or torsion; one mount per
-body, rigid; aerodynamic loads on the fuselage and tail are not included yet
-(the tail load comes with the trim model). The loads are for one body; a
-mirrored ``Fuselage`` describes two identical bodies with the same loads.
+body, rigid; the fuselage's own aerodynamic forces are neglected, and the
+tail force acts at a point (the tail's aerodynamic centre). The loads are for
+one body; a mirrored ``Fuselage`` describes two identical bodies with the same
+loads.
 
 Inputs
 ------
 - A ``Fuselage`` (geometry from ``solaruav.geometry``).
 - Mass items on one body: name, mass [kg], body-axis x [m].
+- Aerodynamic point forces on one body (its share of the tail lift): name,
+  upward force [N] at the load case, body-axis x [m].
 - Structural mass of one body [kg].
 - Mount position: body-axis x [m] (the wing elastic axis there) and the
   spanwise station of the mount on the wing [m].
@@ -87,6 +93,28 @@ class MassItem:
 
 
 @dataclass(frozen=True)
+class PointForce:
+    """An aerodynamic point force on one fuselage body, e.g. its share of the tail lift.
+
+    The value is at the load case it was computed for (it is not scaled by
+    the load factor, but is scaled with the other loads by ``FuselageLoads.scaled``).
+
+    Attributes
+    ----------
+    name : str
+        What applies it, e.g. "htail".
+    upward_force_N : float
+        Force on the body [N], positive up (a tail download is negative).
+    x_m : float
+        Body-axis x where it acts [m]. Must lie within the body.
+    """
+
+    name: str
+    upward_force_N: float
+    x_m: float
+
+
+@dataclass(frozen=True)
 class FuselageLoads:
     """Loads along one fuselage body at one load case.
 
@@ -117,6 +145,8 @@ class FuselageLoads:
         The concentrated masses included.
     structure_mass_kg : float
         Distributed structural mass of the body [kg].
+    point_forces : tuple of PointForce
+        Aerodynamic point forces included, at this case's load level.
 
     Properties
     ----------
@@ -142,6 +172,7 @@ class FuselageLoads:
     mount_moment_N_m: float
     mass_items: tuple[MassItem, ...]
     structure_mass_kg: float
+    point_forces: tuple[PointForce, ...] = ()
 
     @property
     def total_mass_kg(self) -> float:
@@ -160,6 +191,8 @@ class FuselageLoads:
             bending_moment_N_m=self.bending_moment_N_m * factor,
             mount_force_N=self.mount_force_N * factor,
             mount_moment_N_m=self.mount_moment_N_m * factor,
+            point_forces=tuple(replace(force, upward_force_N=force.upward_force_N * factor)
+                               for force in self.point_forces),
         )
 
     def wing_point_load(self) -> WingPointLoad:
@@ -178,6 +211,7 @@ def fuselage_loads(
     structure_mass_kg: float,
     mount_x_m: float,
     load_factor: float,
+    point_forces: Sequence[PointForce] = (),
     n_points: int = 201,
 ) -> FuselageLoads:
     """Shear force, bending moment and mount reaction of one fuselage body.
@@ -197,6 +231,9 @@ def fuselage_loads(
         mount station (see ``loads.elastic_axis_x_m``).
     load_factor : float
         Load factor n.
+    point_forces : sequence of PointForce
+        Aerodynamic point forces on this body at this load case, e.g. its
+        share of the trimmed tail lift.
     n_points : int
         Number of evenly spaced stations along the body (item and mount
         positions are added to these).
@@ -206,14 +243,20 @@ def fuselage_loads(
     FuselageLoads
     """
     nose_x, tail_x = fuselage.origin[0] + fuselage.x[0], fuselage.origin[0] + fuselage.x[-1]
-    for position_name, x in [("mount", mount_x_m)] + [(item.name, item.x_m) for item in mass_items]:
+    positions = [("mount", mount_x_m)] + [(item.name, item.x_m) for item in mass_items]
+    positions += [(force.name, force.x_m) for force in point_forces]
+    for position_name, x in positions:
         if not nose_x <= x <= tail_x:
             raise ValueError(f"{position_name} at x = {x} m is outside {fuselage.name} ({nose_x} to {tail_x} m)")
     if structure_mass_kg < 0:
         raise ValueError("Structural mass must be >= 0")
 
     weight_factor = load_factor * STANDARD_GRAVITY_M_S2
-    item_positions = [item.x_m for item in mass_items]
+    # Every concentrated load as (downward force [N], x [m]): weights of the
+    # items, and the aerodynamic forces with their sign flipped.
+    point_loads = [(weight_factor * item.mass_kg, item.x_m) for item in mass_items]
+    point_loads += [(-force.upward_force_N, force.x_m) for force in point_forces]
+    item_positions = [x for _, x in point_loads]
     nose_side = np.unique(np.concatenate([np.linspace(nose_x, mount_x_m, n_points // 2),
                                           [p for p in item_positions if p <= mount_x_m]]))
     tail_side = np.unique(np.concatenate([np.linspace(mount_x_m, tail_x, n_points - n_points // 2),
@@ -224,14 +267,14 @@ def fuselage_loads(
     # (distance measured from the tail) so the same routine handles both.
     nose_shear, nose_moment = _cantilever_from_free_end(
         nose_side - nose_x, weight_factor * mass_per_length(nose_side),
-        [(weight_factor * item.mass_kg, item.x_m - nose_x) for item in mass_items if item.x_m < mount_x_m],
+        [(force, x - nose_x) for force, x in point_loads if x < mount_x_m],
     )
     tail_reversed = tail_side[::-1]
     tail_shear, tail_moment = _cantilever_from_free_end(
         tail_x - tail_reversed, weight_factor * mass_per_length(tail_reversed),
-        [(weight_factor * item.mass_kg, tail_x - item.x_m) for item in mass_items if item.x_m > mount_x_m],
+        [(force, tail_x - x) for force, x in point_loads if x > mount_x_m],
     )
-    items_at_mount_N = sum(weight_factor * item.mass_kg for item in mass_items if item.x_m == mount_x_m)
+    loads_at_mount_N = sum(force for force, x in point_loads if x == mount_x_m)
 
     return FuselageLoads(
         fuselage_name=fuselage.name,
@@ -241,11 +284,25 @@ def fuselage_loads(
         x_m=np.concatenate([nose_side, tail_side]),
         shear_force_N=np.concatenate([nose_shear, tail_shear[::-1]]),
         bending_moment_N_m=np.concatenate([nose_moment, tail_moment[::-1]]),
-        mount_force_N=float(nose_shear[-1] + tail_shear[-1] + items_at_mount_N),
+        mount_force_N=float(nose_shear[-1] + tail_shear[-1] + loads_at_mount_N),
         mount_moment_N_m=float(tail_moment[-1] - nose_moment[-1]),
         mass_items=tuple(mass_items),
         structure_mass_kg=float(structure_mass_kg),
+        point_forces=tuple(point_forces),
     )
+
+
+def structure_centroid_x_m(fuselage: Fuselage) -> float:
+    """Body-axis x [m] of the centre of the fuselage's distributed structural mass.
+
+    The structure is spread in proportion to the cross-section perimeter, as
+    in ``fuselage_loads``. Input: a Fuselage. Output: x [m] (float).
+    """
+    x = np.linspace(fuselage.origin[0] + fuselage.x[0], fuselage.origin[0] + fuselage.x[-1], 2001)
+    mass_per_length = _structure_mass_per_length(fuselage, 1.0)(x)
+    first_moment = np.sum(0.5 * (mass_per_length[1:] * x[1:] + mass_per_length[:-1] * x[:-1]) * np.diff(x))
+    total = np.sum(0.5 * (mass_per_length[1:] + mass_per_length[:-1]) * np.diff(x))
+    return float(first_moment / total)
 
 
 def _structure_mass_per_length(fuselage: Fuselage, structure_mass_kg: float):

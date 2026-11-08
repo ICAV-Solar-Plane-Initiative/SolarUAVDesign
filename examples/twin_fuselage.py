@@ -8,7 +8,8 @@ The wing, total mass and flight condition are the same as in
 ``reference_aircraft.py``; only the layout changes. The single central
 fuselage becomes two identical fuselages at y = +-0.75 m, each carrying half
 of the original's masses, joined at the back by a tailplane between the booms
-with a fin on each.
+with a fin on each. The tailplane is held up by the booms at its tips, and
+each boom carries half of the tail lift.
 
 A central fuselage hangs its weight on the wing root. Twin fuselages hang it
 part-way out along the span, where it offsets the lift, so the wing's
@@ -21,7 +22,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import matplotlib.pyplot as plt
 from reference_aircraft import (
     FUSELAGE_MASSES,
     OUTPUT_DIR,
@@ -82,6 +82,9 @@ def print_comparison(single, twin) -> None:
          twin.wing_required.required_section_modulus_m3[0] * 1e9),
         ("Wing uniform EI required [N m^2]", single.wing_required.required_uniform_flexural_rigidity_N_m2,
          twin.wing_required.required_uniform_flexural_rigidity_N_m2),
+        ("Tail lift, limit [N]", single.limit.tail_lift_N, twin.limit.tail_lift_N),
+        ("Tailplane max |M|, ultimate [N m]", abs(single.tail_cases.ultimate.bending_moment_N_m).max(),
+         abs(twin.tail_cases.ultimate.bending_moment_N_m).max()),
     ]
     print(f"\n{'':36}{'single':>10}{'twin':>10}{'change in size':>16}")
     for label, single_value, twin_value in rows:
@@ -97,9 +100,8 @@ if __name__ == "__main__":
     twin_aircraft = build_twin_fuselage_aircraft()
     print_geometry(twin_aircraft)
     twin = run_structural_analysis(twin_aircraft, {"fuselages": half_of(FUSELAGE_MASSES["fuselage"])},
-                                   TWIN_OUTPUT_DIR)
+                                   tail_fuselage="fuselages", output_dir=TWIN_OUTPUT_DIR)
     print_results(twin)
     save_figures(twin, "twin", TWIN_OUTPUT_DIR)
 
     print_comparison(single, twin)
-    plt.show()

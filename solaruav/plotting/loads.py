@@ -4,17 +4,19 @@ Purpose
 -------
 ``plot_wing_loads``: the running load, shear force, bending moment and torque
 along one side of the wing at the design load cases, with the cruise lift for
-comparison. ``plot_fuselage_loads``: shear force, bending moment and required
-section modulus along one fuselage body.
+comparison; works for any lifting surface, e.g. the tailplane.
+``plot_fuselage_loads``: shear force, bending moment and required section
+modulus along one fuselage body, with the mass items and tail force marked.
 
 Four stacked panels against spanwise position, root to tip:
 
-1. Running load: lift - n x wing weight [N/m] per case, and cruise lift only.
+1. Running load: lift - n x surface weight [N/m] per case, and cruise lift only.
 2. Shear force V [N].
 3. Bending moment M [N m].
 4. Torque T about the elastic axis [N m].
 
-Fuselage mounts away from the root (e.g. twin fuselages) are marked by dotted lines.
+Point loads away from the root (fuselage mounts on a wing, boom supports
+under a tailplane) are marked by dotted lines.
 
 Inputs
 ------
@@ -66,7 +68,7 @@ def plot_wing_loads(cases: DesignLoadCases, cruise: LiftingLineResult | None = N
     for (name, loads), colour in zip(case_list, CASE_COLOURS):
         label = f"{name}, n = {loads.load_factor:.1f}"
         style = dict(color=colour, linewidth=LINE_WIDTH)
-        axes[0].plot(loads.s_m, loads.net_load_per_span_N_m, label=f"{label}: lift − n × wing weight", **style)
+        axes[0].plot(loads.s_m, loads.net_load_per_span_N_m, label=f"{label}: lift − n × own weight", **style)
         axes[1].plot(loads.s_m, loads.shear_force_N, label=label, **style)
         axes[2].plot(loads.s_m, loads.bending_moment_N_m, label=label, **style)
         axes[3].plot(loads.s_m, loads.torque_N_m, label=label, **style)
@@ -84,16 +86,17 @@ def plot_wing_loads(cases: DesignLoadCases, cruise: LiftingLineResult | None = N
             continue  # acts at the root: no effect on the wing's internal loads
         for ax in axes:
             ax.axvline(point_load.s_m, color=REFERENCE_COLOUR, linewidth=0.8, linestyle=":")
-        axes[1].annotate(f"{point_load.name} mount\n{point_load.downward_force_N:.0f} N at limit",
+        direction = "down" if point_load.downward_force_N >= 0 else "up"
+        axes[1].annotate(f"{point_load.name}\n{abs(point_load.downward_force_N):.1f} N {direction} at limit",
                          (point_load.s_m, 0), xytext=(4, 4), textcoords="offset points",
                          fontsize=8, color=REFERENCE_COLOUR)
     axes[-1].set_xlabel("Spanwise position s [m]")
-    axes[0].set_title(f"Wing loads: {cases.limit.surface_name} (one side)")
+    axes[0].set_title(f"Loads: {cases.limit.surface_name} (one side)")
     fig.text(
         0.5, 0.005,
-        "Lift is n × total weight. Wing-borne mass relieves the load along the span; fuselage mounts "
-        "(dotted lines) step the loads where they attach; any mass at the centreline (e.g. a central "
-        "fuselage) reacts at the root, where it equals twice the root shear.",
+        "Lift is this surface's trimmed lift (wing + tail = n × total weight). Its own mass relieves the "
+        "load along the span; point loads (dotted lines: fuselage mounts, boom supports) step the loads "
+        "where they act; whatever remains (e.g. a central fuselage) reacts at the root, twice the root shear.",
         ha="center", fontsize=8, wrap=True,
     )
     fig.tight_layout(rect=(0, 0.03, 1, 1))
@@ -138,6 +141,7 @@ def plot_fuselage_loads(limit: FuselageLoads, required: RequiredFuselageSectionP
         axes[2].set_ylim(bottom=0)
 
     markers = [("mount", limit.mount_x_m)] + [(item.name, item.x_m) for item in limit.mass_items]
+    markers += [(f"{force.name} lift {force.upward_force_N:+.1f} N", force.x_m) for force in limit.point_forces]
     for name, x in markers:
         for ax in axes:
             ax.axvline(x, color=REFERENCE_COLOUR, linewidth=0.8, linestyle=":")

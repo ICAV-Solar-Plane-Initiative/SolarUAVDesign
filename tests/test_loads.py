@@ -116,15 +116,41 @@ def test_chord_proportional_mass_integrates_to_total():
 # ---------------------------------------------------------------------- #
 def test_design_cases_lift_and_safety_factor():
     wing = reference_wing()
-    cases = design_load_cases(
-        wing, Airfoil(alpha_zero_lift_deg=-3.0, cm0=-0.08), aircraft_mass_kg=5.0,
-        mass_per_span_kg_m=chord_proportional_mass(wing, 1.8),
-        airspeed_m_s=14.0, air_density_kg_m3=DENSITY, limit_load_factor=3.0, safety_factor=1.5,
-    )
-    assert cases.limit_aero.lift_N == pytest.approx(3.0 * 5.0 * STANDARD_GRAVITY_M_S2)
+    airfoil = Airfoil(alpha_zero_lift_deg=-3.0, cm0=-0.08)
+    limit_aero = solve_lifting_line_for_lift(wing, 3.0 * 5.0 * STANDARD_GRAVITY_M_S2, 14.0, DENSITY,
+                                             airfoil=airfoil, n_output=201)
+    cases = design_load_cases(limit_aero, wing, airfoil, 3.0, chord_proportional_mass(wing, 1.8), safety_factor=1.5)
+    assert cases.limit_aero is limit_aero
     assert cases.ultimate.load_factor == pytest.approx(4.5)
     np.testing.assert_allclose(cases.ultimate.bending_moment_N_m, 1.5 * cases.limit.bending_moment_N_m)
     np.testing.assert_allclose(cases.ultimate.torque_N_m, 1.5 * cases.limit.torque_N_m)
+
+
+def test_supported_surface_has_no_centreline_shear_or_torque():
+    # A tailplane held up by booms at its tips: the supports take all the
+    # load, so the centreline carries no shear or torque, only bending.
+    tail = LiftingSurface.trapezoidal("htail", span=1.5, root_chord=0.18)
+    airfoil = Airfoil(cm0=-0.05)
+    aero = solve_lifting_line_for_lift(tail, -20.0, AIRSPEED, DENSITY, airfoil=airfoil, n_output=401)
+    mass = chord_proportional_mass(tail, 0.2)
+    cases = design_load_cases(aero, tail, airfoil, 3.0, mass, support_s_m=0.75)
+    assert cases.limit.root_shear_force_N == pytest.approx(0.0, abs=1e-9)
+    assert cases.limit.root_torque_N_m == pytest.approx(0.0, abs=1e-12)
+    # Centre moment = moment of the net load on one side about the centreline,
+    # minus the support reaction times its arm.
+    free = design_load_cases(aero, tail, airfoil, 3.0, mass)  # clamped at the root instead
+    net_load = free.limit.root_shear_force_N
+    assert cases.limit.root_bending_moment_N_m == pytest.approx(
+        free.limit.root_bending_moment_N_m - net_load * 0.75, rel=1e-9)
+
+
+def test_support_at_the_root_changes_nothing():
+    wing = reference_wing()
+    aero = solve_lifting_line(wing, 4.0, AIRSPEED, DENSITY)
+    mass = chord_proportional_mass(wing, 1.0)
+    clamped = design_load_cases(aero, wing, Airfoil(), 2.0, mass)
+    supported = design_load_cases(aero, wing, Airfoil(), 2.0, mass, support_s_m=0.0)
+    np.testing.assert_allclose(supported.limit.bending_moment_N_m, clamped.limit.bending_moment_N_m)
 
 
 def test_mismatched_surface_is_rejected():

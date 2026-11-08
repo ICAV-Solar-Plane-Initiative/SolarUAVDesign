@@ -45,14 +45,19 @@ loads only the root. Any mass that is neither in the wing distribution nor
 on a mounted fuselage also hangs at the root: it adds to the lift required
 but gives no relief.
 
-Assumptions: the wing carries all the aircraft's lift (tail load and any lift
-from fuselages neglected; the lifting line ignores fuselage interference);
+The same routine gives the loads on the tailplane, from its own trimmed lift,
+held up where it meets the boom(s) (``support_s_m`` in ``design_load_cases``).
+
+Assumptions: the wing and tail lift come from the trimmed lifting-line
+solutions (fuselage lift neglected; the lifting line ignores fuselage
+interference);
 loads are taken in the wing's local (x, s) plane, so small sweep and dihedral
 are ignored; drag and in-plane loads are not included.
 
 Inputs
 ------
-- Spanwise lift distribution from ``aerodynamics.lifting_line`` [N/m].
+- Spanwise lift distribution from ``aerodynamics.lifting_line`` [N/m], at
+  the trimmed lift (``stability.trim_symmetric_flight``).
 - Spanwise mass distribution of the wing (structure, panels, anything else
   carried in the wing) [kg/m], as a function of s.
 - Mount loads from fuselages: spanwise position [m], downward force [N] and
@@ -74,7 +79,7 @@ from typing import Callable, Sequence
 import numpy as np
 
 from ..aerodynamics.airfoil import Airfoil
-from ..aerodynamics.lifting_line import LiftingLineResult, solve_lifting_line_for_lift
+from ..aerodynamics.lifting_line import LiftingLineResult
 from ..geometry.surface import LiftingSurface
 
 STANDARD_GRAVITY_M_S2 = 9.80665
@@ -252,8 +257,8 @@ def wing_loads(
     Parameters
     ----------
     aero : LiftingLineResult
-        Lifting-line solution for this wing at this load case. Its total lift
-        should be n W (see ``solve_lifting_line_for_lift``).
+        Lifting-line solution for this wing at this load case, at its trimmed
+        lift (see ``stability.trim_symmetric_flight``).
     surface : LiftingSurface
         The wing geometry that ``aero`` was solved for.
     airfoil : Airfoil
@@ -342,47 +347,46 @@ def elastic_axis_x_m(surface: LiftingSurface, s_m: float, chord_fraction: float)
 
 
 def design_load_cases(
+    limit_aero: LiftingLineResult,
     surface: LiftingSurface,
     airfoil: Airfoil,
-    aircraft_mass_kg: float,
-    mass_per_span_kg_m: MassPerSpan,
-    airspeed_m_s: float,
-    air_density_kg_m3: float,
     limit_load_factor: float,
+    mass_per_span_kg_m: MassPerSpan,
     safety_factor: float = 1.5,
     elastic_axis_chord_fraction: float = 0.25,
     mass_chord_fraction: float = 0.40,
     point_loads: Sequence[WingPointLoad] = (),
-    n_terms: int = 30,
-    n_points: int = 201,
+    support_s_m: float | None = None,
 ) -> DesignLoadCases:
-    """Wing loads at the limit and ultimate load factors (symmetric pull-up).
+    """Loads on a lifting surface at the limit and ultimate load factors.
 
-    The limit case is a real flight condition: the lifting line is solved at
-    the angle of attack that gives L = n_limit W at the manoeuvre airspeed,
-    so the shape of the lift distribution is right for that lift (twist makes
-    it change with angle of attack). The ultimate loads are the limit loads
-    times the safety factor; they are a strength margin, not a flight
-    condition, so the aerodynamics are not re-solved for them.
+    The limit case is a real flight condition: ``limit_aero`` is the surface's
+    lifting-line solution in the trimmed limit pull-up (see
+    ``stability.trim_symmetric_flight``), so its lift and its distribution are
+    right for that condition. The ultimate loads are the limit loads times the
+    safety factor; they are a strength margin, not a flight condition, so the
+    aerodynamics are not re-solved for them.
+
+    How the surface is held:
+
+    - ``support_s_m=None`` (a wing): the root (s = 0) carries whatever the
+      lift, the surface's own mass and the point loads leave over.
+    - ``support_s_m`` given (e.g. a tailplane on booms): the surface is held
+      up at that station, which reacts the net force and torque of its side,
+      so the centreline carries no shear. At 0 this is the same as None.
 
     Parameters
     ----------
+    limit_aero : LiftingLineResult
+        Lifting-line solution of this surface in the limit condition.
     surface : LiftingSurface
-        The wing (symmetric, horizontal, root on the centreline).
+        The surface ``limit_aero`` was solved for.
     airfoil : Airfoil
-        Section properties of the wing.
-    aircraft_mass_kg : float
-        Total aircraft mass [kg]. The wing lifts n times its weight.
-    mass_per_span_kg_m : function of s
-        Wing-borne mass per unit span [kg/m], one side (see ``wing_loads``).
-    airspeed_m_s : float
-        Airspeed of the limit manoeuvre [m/s]. Must be high enough that the
-        wing can reach n_limit W without stalling (at or above the manoeuvre
-        speed V_A = V_stall sqrt(n_limit)).
-    air_density_kg_m3 : float
-        Air density [kg/m^3].
+        Section properties of the surface.
     limit_load_factor : float
-        Limit load factor n_limit.
+        Limit load factor n_limit; scales the inertial load of the surface mass.
+    mass_per_span_kg_m : function of s
+        Surface-borne mass per unit span [kg/m], one side (see ``wing_loads``).
     safety_factor : float
         Ultimate load factor = limit_load_factor * safety_factor.
     elastic_axis_chord_fraction, mass_chord_fraction : float
@@ -391,34 +395,62 @@ def design_load_cases(
         Concentrated loads at the limit load factor (e.g. fuselage mounts from
         ``FuselageLoads.wing_point_load``); scaled with the safety factor for
         the ultimate case.
-    n_terms : int
-        Number of Fourier terms in the lifting-line solution.
-    n_points : int
-        Number of spanwise output points, root to tip.
+    support_s_m : float or None
+        Spanwise station [m] where the surface is held up, or None.
 
     Returns
     -------
     DesignLoadCases
     """
-    if not (aircraft_mass_kg > 0 and limit_load_factor > 0 and safety_factor >= 1):
-        raise ValueError("Need aircraft mass > 0, limit load factor > 0 and safety factor >= 1")
+    if not (limit_load_factor > 0 and safety_factor >= 1):
+        raise ValueError("Need limit load factor > 0 and safety factor >= 1")
 
-    weight_N = aircraft_mass_kg * STANDARD_GRAVITY_M_S2
-    limit_aero = solve_lifting_line_for_lift(
-        surface, limit_load_factor * weight_N, airspeed_m_s, air_density_kg_m3,
-        airfoil=airfoil, n_terms=n_terms, n_output=n_points,
-    )
-    limit_loads = wing_loads(
-        limit_aero, surface, airfoil, limit_load_factor, mass_per_span_kg_m,
-        elastic_axis_chord_fraction=elastic_axis_chord_fraction,
-        mass_chord_fraction=mass_chord_fraction,
-        point_loads=point_loads,
-    )
+    def loads_with(extra_point_loads):
+        return wing_loads(
+            limit_aero, surface, airfoil, limit_load_factor, mass_per_span_kg_m,
+            elastic_axis_chord_fraction=elastic_axis_chord_fraction,
+            mass_chord_fraction=mass_chord_fraction,
+            point_loads=[*point_loads, *extra_point_loads],
+        )
+
+    limit_loads = loads_with([])
+    if support_s_m is not None and support_s_m > 0:
+        # The support takes the force and torque the root would otherwise
+        # carry, so the centreline is left with none. Root shear is the net
+        # upward load on the side, so the support pushes down by that much
+        # (or up, when the net load is downward).
+        support = WingPointLoad(
+            name="support",
+            s_m=support_s_m,
+            downward_force_N=limit_loads.root_shear_force_N,
+            nose_up_moment_N_m=-limit_loads.root_torque_N_m,
+        )
+        limit_loads = loads_with([support])
+
     return DesignLoadCases(
         limit=limit_loads,
         ultimate=limit_loads.scaled(safety_factor),
         limit_aero=limit_aero,
     )
+
+
+def wing_mass_centroid_x_m(
+    surface: LiftingSurface, mass_per_span_kg_m: MassPerSpan, mass_chord_fraction: float = 0.40
+) -> float:
+    """Body-axis x [m] of the centre of mass of a surface's distributed mass.
+
+    The mass at each station sits at ``mass_chord_fraction`` of the local
+    chord. Inputs: the surface; its mass per span [kg/m] (function of s);
+    the chordwise fraction. Output: x [m] (float).
+    """
+    s = np.linspace(0.0, surface.s[-1], 2001)
+    mass_per_span = np.asarray(mass_per_span_kg_m(s), dtype=float)
+    x_mass = surface.origin[0] + surface.x_le_at(s) + mass_chord_fraction * surface.chord_at(s)
+    first_moment = _integrate_from_tip(mass_per_span * x_mass, s)[0]
+    total = _integrate_from_tip(mass_per_span, s)[0]
+    if total <= 0:
+        raise ValueError(f"{surface.name}: the mass distribution has no mass")
+    return float(first_moment / total)
 
 
 def chord_proportional_mass(surface: LiftingSurface, mass_kg: float) -> MassPerSpan:
