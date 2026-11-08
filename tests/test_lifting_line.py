@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 
 from solaruav import LiftingSurface, Station
-from solaruav.aerodynamics import Airfoil, solve_lifting_line
+from solaruav.aerodynamics import Airfoil, effective_lift_slope_per_rad, solve_lifting_line
 
 AIRSPEED = 10.0  # m/s
 DENSITY = 1.225  # kg/m^3
@@ -146,3 +146,84 @@ def test_unsupported_surfaces_are_rejected():
     split = LiftingSurface("split", [Station(s=0.2, x_le=0.0, chord=0.3), Station(s=1.0, x_le=0.0, chord=0.3)])
     with pytest.raises(ValueError):
         solve_lifting_line(split, 0.0, AIRSPEED, DENSITY)
+
+
+# ---------------------------------------------------------------------- #
+# Downwash and induced drag distributions
+# ---------------------------------------------------------------------- #
+def test_elliptic_wing_has_uniform_downwash():
+    wing = elliptic_wing()
+    result = solve_lifting_line(wing, 5.0, AIRSPEED, DENSITY)
+    expected = AIRSPEED * result.lift_coefficient / (np.pi * wing.aspect_ratio)
+    np.testing.assert_allclose(result.downwash_m_s, expected, rtol=1e-2)
+
+
+def test_induced_drag_per_span_integrates_to_total():
+    wing = LiftingSurface.from_panels(
+        "w", root_chord=0.32, panels=[{"span": 1.5}, {"span": 1.0, "taper": 0.6, "twist_deg": -2.0}],
+    )
+    result = solve_lifting_line(wing, 4.0, AIRSPEED, DENSITY, n_output=801)
+    drag_per_span, s = result.induced_drag_per_span_N_m, result.s_m
+    integrated = 2 * np.sum(0.5 * (drag_per_span[1:] + drag_per_span[:-1]) * np.diff(s))
+    assert integrated == pytest.approx(result.induced_drag_N, rel=2e-3)
+
+
+# ---------------------------------------------------------------------- #
+# Sweep correction (Helmbold / DATCOM)
+# ---------------------------------------------------------------------- #
+def lift_curve_slope(surface, **kwargs):
+    """dCL/dalpha [1/rad] from two lifting-line solutions."""
+    lift_at_zero = solve_lifting_line(surface, 0.0, AIRSPEED, DENSITY, n_terms=40, **kwargs).lift_coefficient
+    lift_at_one = solve_lifting_line(surface, 1.0, AIRSPEED, DENSITY, n_terms=40, **kwargs).lift_coefficient
+    return (lift_at_one - lift_at_zero) / np.radians(1.0)
+
+
+def helmbold_lift_curve_slope(aspect_ratio, midchord_sweep_deg, section_slope=2 * np.pi):
+    """DATCOM / Helmbold, incompressible."""
+    kappa = section_slope / (2 * np.pi)
+    tan_sweep = np.tan(np.radians(midchord_sweep_deg))
+    return 2 * np.pi * aspect_ratio / (2 + np.sqrt(aspect_ratio**2 * (1 + tan_sweep**2) / kappa**2 + 4))
+
+
+def test_unswept_surface_is_unaffected_by_the_correction():
+    wing = LiftingSurface.trapezoidal("w", span=6.0, root_chord=0.6, taper=1.0)
+    corrected = solve_lifting_line(wing, 4.0, AIRSPEED, DENSITY)
+    uncorrected = solve_lifting_line(wing, 4.0, AIRSPEED, DENSITY, sweep_correction=False)
+    assert corrected.lift_coefficient == pytest.approx(uncorrected.lift_coefficient, rel=1e-12)
+
+
+def test_sweep_acts_as_a_reduced_section_slope():
+    # A constant-chord wing swept 30 deg (mid-chord sweep 30 deg) behaves like
+    # the unswept wing with section slope a0 cos 30.
+    swept = LiftingSurface.trapezoidal("w", span=8.0, root_chord=1.0, sweep_le_deg=30.0)
+    straight = LiftingSurface.trapezoidal("w", span=8.0, root_chord=1.0)
+    reduced = Airfoil(lift_slope_per_rad=2 * np.pi * np.cos(np.radians(30.0)))
+    a = solve_lifting_line(swept, 5.0, AIRSPEED, DENSITY)
+    b = solve_lifting_line(straight, 5.0, AIRSPEED, DENSITY, airfoil=reduced)
+    assert a.lift_coefficient == pytest.approx(b.lift_coefficient, rel=1e-12)
+
+
+@pytest.mark.parametrize("aspect_ratio", [6.0, 10.0, 17.0])
+@pytest.mark.parametrize("sweep_deg", [15.0, 30.0])
+def test_sweep_reduces_lift_slope_as_helmbold_predicts(aspect_ratio, sweep_deg):
+    swept = LiftingSurface.trapezoidal("w", span=aspect_ratio, root_chord=1.0, sweep_le_deg=sweep_deg)
+    straight = LiftingSurface.trapezoidal("w", span=aspect_ratio, root_chord=1.0)
+    ratio = lift_curve_slope(swept) / lift_curve_slope(straight)
+    expected = helmbold_lift_curve_slope(aspect_ratio, sweep_deg) / helmbold_lift_curve_slope(aspect_ratio, 0.0)
+    assert ratio == pytest.approx(expected, rel=1e-2)
+
+
+def test_correction_can_be_switched_off():
+    swept = LiftingSurface.trapezoidal("w", span=8.0, root_chord=1.0, sweep_le_deg=30.0)
+    straight = LiftingSurface.trapezoidal("w", span=8.0, root_chord=1.0)
+    assert lift_curve_slope(swept, sweep_correction=False) == pytest.approx(lift_curve_slope(straight), rel=1e-12)
+
+
+def test_multi_panel_sweep_is_area_weighted():
+    # Equal-area panels, one unswept and one swept 30 deg at mid-chord:
+    # the factor is the mean of cos 0 and cos 30.
+    wing = LiftingSurface.from_panels(
+        "w", root_chord=0.5, panels=[{"span": 1.0}, {"span": 1.0, "sweep_le_deg": 30.0}],
+    )
+    expected = 2 * np.pi * (1 + np.cos(np.radians(30.0))) / 2
+    assert effective_lift_slope_per_rad(wing, Airfoil()) == pytest.approx(expected)
