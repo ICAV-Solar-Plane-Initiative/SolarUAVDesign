@@ -235,6 +235,7 @@ def solve_lifting_line(
     # Output points from root (theta = pi/2) to tip (theta = 0).
     theta = np.linspace(np.pi / 2, 0.0, n_output)
     s = (surface.span / 2) * np.cos(theta)
+    s[0] = 0.0  # cos(pi/2) is only zero to rounding error
     circulation, local_cl, induced_angle_rad = _distributions(
         surface, harmonics, coefficients, theta, s, airspeed_m_s
     )
